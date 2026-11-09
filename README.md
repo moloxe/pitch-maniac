@@ -37,6 +37,28 @@ conda deactivate
 
 ---
 
+## Pistas (Stems) y Presets Disponibles
+
+Puedes elegir cualquiera de estas pistas individuales o combinarlas:
+
+| Nombre del Stem | Instrumento / Componente | Motor utilizado |
+| :--- | :--- | :--- |
+| `vocals` | Voz principal y coros | `htdemucs` o `Mel-Band Roformer` (`studio_vocals=True`) |
+| `drums` | Batería y percusiones | `htdemucs` o `htdemucs_6s` |
+| `bass` | Bajo | `htdemucs` o `htdemucs_6s` |
+| `guitar` | Guitarra (eléctrica / acústica) | `htdemucs_6s` (activación automática) |
+| `piano` | Teclados y piano | `htdemucs_6s` (activación automática) |
+| `other` | Resto de instrumentos (sintetizadores, metales, etc.) | `htdemucs` o `htdemucs_6s` |
+
+### Presets rápidos
+También puedes pasar directamente un preset en `stems="..."`:
+- `"all"`: Extrae todas las pistas disponibles (`vocals`, `drums`, `bass`, `other`).
+- `"karaoke"`: Extrae toda la base instrumental sin la voz (`drums`, `bass`, `other`).
+- `"acapella"`: Extrae únicamente la voz (`vocals`).
+- `"rhythm"`: Extrae la base rítmica (`drums`, `bass`).
+
+---
+
 ## Uso en Código Python (Mínima Verbosidad)
 
 ```python
