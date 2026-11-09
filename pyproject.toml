@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "track-splitter"
+version = "0.1.0"
+description = "Minimalist audio downloader and stem separation library"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "Franco Moloche" }
+]
+dependencies = [
+    "torch>=2.2.0",
+    "torchaudio>=2.2.0",
+    "soundfile>=0.12.0",
+    "demucs>=4.0.0",
+    "numpy<2",
+    "yt-dlp",
+    "yt-dlp-ejs",
+    "einops",
+    "beartype",
+    "rotary-embedding-torch"
+]
+
+[project.scripts]
+track-splitter = "track_splitter.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["track_splitter*"]
+
+[tool.setuptools.package-data]
+track_splitter = ["vendor/*.npy"]
+

@@ -1,0 +1,11 @@
+torch==2.5.1
+torchaudio==2.5.1
+soundfile>=0.12.0
+demucs==4.0.1
+numpy<2
+beartype
+rotary-embedding-torch
+einops
+yt-dlp
+yt-dlp-ejs
+
