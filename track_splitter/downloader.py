@@ -124,8 +124,9 @@ def download(
     if final_audio_path.exists():
         return final_audio_path
 
-    # 2. Descargar audio temporal
-    temp_template = str(out_path / f"temp_{title}.%(ext)s")
+    # 2. Descargar audio con un identificador temporal seguro (sin caracteres especiales de glob)
+    temp_prefix = f"raw_{vid or 'temp'}"
+    temp_template = str(out_path / f"{temp_prefix}.%(ext)s")
     ydl_opts_download = {
         "format": "bestaudio/best",
         "outtmpl": temp_template,
@@ -135,8 +136,8 @@ def download(
     with yt_dlp.YoutubeDL(ydl_opts_download) as ydl:
         ydl.download([url])
 
-    # Encontrar archivo descargado
-    matching = list(out_path.glob(f"temp_{title}.*"))
+    # Encontrar archivo descargado buscando por el prefijo seguro
+    matching = [f for f in out_path.iterdir() if f.name.startswith(f"{temp_prefix}.")]
     if not matching:
         raise RuntimeError("No se pudo localizar el archivo descargado de YouTube.")
     temp_file = matching[0]

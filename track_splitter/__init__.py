@@ -87,8 +87,13 @@ def split(
         song_dir.mkdir(parents=True, exist_ok=True)
         mix_wav = song_dir / "mix.wav"
         shutil.move(str(downloaded_wav), str(mix_wav))
-        # Limpiar carpeta temporal si está vacía
-        (out_root / "_temp").rmdir() if (out_root / "_temp").exists() else None
+        # Limpiar archivo o carpeta temporal de forma segura
+        temp_dir = out_root / "_temp"
+        try:
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception:
+            pass
     else:
         # Archivo local
         local_path = Path(source_str).resolve()
