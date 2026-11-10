@@ -1,6 +1,6 @@
 import re
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import subprocess
 import shutil
 import yt_dlp
@@ -96,18 +96,12 @@ def download(
     out_dir: str | Path = "downloads",
     format: str = "wav",
     quiet: bool = True,
-) -> Path:
+    download_thumbnail: bool = False,
+) -> Tuple[Path, Optional[Path], Dict[str, Any]]:
     """
-    Descarga el audio de un video de YouTube en la mejor calidad y lo entrega convertido a WAV o M4A.
+    Descarga el audio de un video de YouTube en la mejor calidad y opcionalmente su miniatura.
     
-    Args:
-        url_or_id: URL de YouTube o ID del video.
-        out_dir: Carpeta de destino.
-        format: 'wav' (recomendado) o 'm4a'.
-        quiet: Silenciar logs de descarga.
-        
-    Returns:
-        Path al archivo de audio descargado.
+    Retorna: (audio_path, thumbnail_path, info_dict)
     """
     vid = parse_video_id(url_or_id)
     url = f"https://www.youtube.com/watch?v={vid}" if vid else str(url_or_id).strip()
@@ -121,8 +115,20 @@ def download(
         title = sanitize_filename(info.get("title") or vid or "track")
 
     final_audio_path = out_path / f"{title}.{format}"
+    thumb_path = out_path / "thumb.jpg" if download_thumbnail else None
+
+    # Descargar thumbnail si se pide y aún no existe
+    if download_thumbnail and not thumb_path.exists():
+        thumb_url = info.get("thumbnail") or (f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg" if vid else None)
+        if thumb_url:
+            try:
+                import urllib.request
+                urllib.request.urlretrieve(thumb_url, str(thumb_path))
+            except Exception:
+                pass
+
     if final_audio_path.exists():
-        return final_audio_path
+        return final_audio_path, thumb_path, info
 
     # 2. Descargar audio con un identificador temporal seguro (sin caracteres especiales de glob)
     temp_prefix = f"raw_{vid or 'temp'}"
@@ -161,7 +167,7 @@ def download(
                 str(final_audio_path),
             ]
             subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return final_audio_path
+        return final_audio_path, thumb_path, info
     finally:
         if temp_file.exists():
             temp_file.unlink(missing_ok=True)
