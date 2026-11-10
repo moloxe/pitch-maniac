@@ -1,4 +1,6 @@
+import os
 import re
+import sys
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 import subprocess
@@ -11,6 +13,31 @@ _YT_PATTERNS = [
     re.compile(r"(?:youtube\.com/shorts/)([\w-]{11})"),
     re.compile(r"(?:youtube\.com/embed/)([\w-]{11})"),
 ]
+
+
+def get_ffmpeg_bin() -> str:
+    """Busca el binario de ffmpeg en el PATH o en el directorio bin del entorno Python activo."""
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    # Buscar junto al intérprete de Python (ej: /opt/anaconda3/envs/track-splitter/bin/ffmpeg)
+    py_dir = Path(sys.executable).parent
+    env_ffmpeg = py_dir / "ffmpeg"
+    if env_ffmpeg.is_file() and os.access(str(env_ffmpeg), os.X_OK):
+        return str(env_ffmpeg)
+    # Candidatos comunes de Anaconda / Homebrew
+    common_candidates = [
+        Path("/opt/anaconda3/envs/track-splitter/bin/ffmpeg"),
+        Path("/opt/anaconda3/bin/ffmpeg"),
+        Path("/opt/homebrew/bin/ffmpeg"),
+        Path("/usr/local/bin/ffmpeg"),
+    ]
+    for c in common_candidates:
+        if c.is_file() and os.access(str(c), os.X_OK):
+            return str(c)
+    raise RuntimeError(
+        "ffmpeg no se encontró en el PATH. Instálalo con 'conda install ffmpeg' o agrégalo a tu sistema."
+    )
 
 
 def parse_video_id(url_or_id: str) -> Optional[str]:
@@ -66,11 +93,7 @@ def search(query: str, limit: int = 10) -> List[Dict[str, Any]]:
 def convert_to_wav(input_path: Path, output_path: Path, sample_rate: int = 44100) -> Path:
     """Convierte cualquier archivo de audio a WAV PCM 16-bit 44.1kHz estéreo usando ffmpeg."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    ffmpeg_bin = shutil.which("ffmpeg")
-    if not ffmpeg_bin:
-        raise RuntimeError(
-            "ffmpeg no se encontró en el PATH. Instálalo con 'conda install ffmpeg' o agrégalo a tu sistema."
-        )
+    ffmpeg_bin = get_ffmpeg_bin()
 
     cmd = [
         ffmpeg_bin,
@@ -152,9 +175,7 @@ def download(
         if format.lower() == "wav":
             convert_to_wav(temp_file, final_audio_path)
         else:
-            ffmpeg_bin = shutil.which("ffmpeg")
-            if not ffmpeg_bin:
-                raise RuntimeError("ffmpeg requerido para transcodificar.")
+            ffmpeg_bin = get_ffmpeg_bin()
             cmd = [
                 ffmpeg_bin,
                 "-y",

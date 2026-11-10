@@ -231,7 +231,18 @@ async fn process_track<R: tauri::Runtime>(
         .map_err(|e| format!("Worker crashed: {e}"))?;
 
     let stdout_str = String::from_utf8_lossy(&output.stdout);
-    let resp: ProcessResponse = serde_json::from_str(&stdout_str)
+    
+    // Find the JSON line in stdout (in case yt-dlp or libraries print extra non-JSON lines to stdout)
+    let json_line = stdout_str
+        .lines()
+        .rev()
+        .find(|line| {
+            let trimmed = line.trim();
+            trimmed.starts_with('{') && trimmed.ends_with('}')
+        })
+        .unwrap_or(stdout_str.trim());
+
+    let resp: ProcessResponse = serde_json::from_str(json_line)
         .map_err(|e| format!("Failed to parse process output: {e} -> {stdout_str}"))?;
 
     if let Some(song) = resp.song {
