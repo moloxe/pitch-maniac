@@ -87,19 +87,56 @@ resultados = search("Bohemian Rhapsody", limit=3)
 
 ---
 
-## Uso desde Línea de Comandos (CLI)
+## Referencia Completa del CLI (`track-splitter`)
+
+```text
+track-splitter [-h] [-s STEMS] [-o OUT] [--download-only] [--format {wav,m4a}]
+               [--search QUERY] [--studio-vocals] [--fine-tuned]
+               [--device {auto,mps,cuda,cpu}] [source]
+```
+
+### Argumentos y Opciones
+
+| Opción / Flag | Parámetro | Por defecto | Descripción |
+| :--- | :--- | :--- | :--- |
+| `source` | `URL / ID / Archivo` | *Requerido (salvo `--search`)* | Enlace de YouTube (`https://...`), ID de video (ej. `dQw4w9WgXcQ`), o ruta a un archivo local (`.mp3`, `.wav`, `.m4a`, `.flac`). |
+| `-s`, `--stems` | `STEMS` | `None` (todas) | Pistas a extraer separadas por coma (ej. `guitar,drums`, `vocals,bass`) o presets (`karaoke`, `acapella`, `rhythm`, `all`). |
+| `-o`, `--out` | `DIRECTORIO` | `output` | Carpeta de destino donde se guardarán la mezcla y los stems. |
+| `--download-only` | *(Flag)* | `False` | Solo descarga y convierte el audio de YouTube sin realizar separación de stems. |
+| `--format` | `wav` \| `m4a` | `wav` | Formato de salida cuando se usa con `--download-only`. |
+| `--search` | `QUERY` | - | Busca canciones en YouTube mostrando título, duración y URL en terminal. |
+| `--studio-vocals` | *(Flag)* | `False` | Usa el modelo **Mel-Band Roformer** para aislar voces con calidad de estudio. |
+| `--fine-tuned` | *(Flag)* | `False` | Usa el modelo refinado `htdemucs_ft` en lugar del estándar. |
+| `--device` | `auto` \| `mps` \| `cuda` \| `cpu` | `auto` | Dispositivo de cómputo. `auto` detecta automáticamente Apple Silicon (`mps`) o NVIDIA (`cuda`). |
+| `-h`, `--help` | *(Flag)* | - | Muestra el mensaje de ayuda con todas las opciones. |
+
+---
+
+## Ejemplos Rápidos de Comandos CLI
 
 ```bash
-# Separar voz y guitarra desde YouTube
-track-splitter "https://www.youtube.com/watch?v=dQw4w9WgXcQ" -s vocals,guitar
+# 1. Separar guitarra y batería desde YouTube
+track-splitter "https://www.youtube.com/watch?v=wMsazR6Tnf8" -s guitar,drums
 
-# Separar con preset karaoke desde un archivo local
-track-splitter ./mi_cancion.mp3 -s karaoke
+# 2. Separar solo voz y bajo desde un MP3 local
+track-splitter ./mi_cancion.mp3 -s vocals,bass
 
-# Solo descargar el audio en WAV
+# 3. Base instrumental completa (preset Karaoke)
+track-splitter "https://youtu.be/..." -s karaoke
+
+# 4. Solo voces con calidad de estudio (Mel-Band Roformer)
+track-splitter "https://youtu.be/..." -s vocals --studio-vocals
+
+# 5. Guardar en una carpeta personalizada
+track-splitter "https://youtu.be/..." -s drums -o ./mis_baterias
+
+# 6. Solo descargar el audio en WAV sin separar
 track-splitter "https://youtu.be/..." --download-only
 
-# Buscar canciones en YouTube
+# 7. Solo descargar en formato M4A / AAC
+track-splitter "https://youtu.be/..." --download-only --format m4a
+
+# 8. Buscar canciones en YouTube
 track-splitter --search "Queen Radio Ga Ga"
 ```
 
