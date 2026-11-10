@@ -73,10 +73,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
     <div className="w-80 h-full bg-slate-950/80 backdrop-blur-md border-r border-slate-800 flex flex-col shrink-0">
       {/* Header & Add Button */}
       <div className="p-4 border-b border-slate-800 flex items-center justify-between">
-        <div className="flex items-center space-x-2">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center shadow-md shadow-cyan-500/20">
-            <Music className="w-4 h-4 text-white" />
-          </div>
+        <div className="flex items-center space-x-2.5">
+          <img
+            src="/logo.svg"
+            alt="Pitch Maniac"
+            className="w-8 h-8 rounded-lg shadow-md shadow-cyan-500/20 object-contain"
+          />
           <div>
             <h1 className="text-sm font-bold text-white tracking-wide">Pitch Maniac</h1>
             <p className="text-[10px] text-slate-400">Karaoke Vocal Studio</p>

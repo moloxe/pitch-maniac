@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="128" y2="128" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#020617"/>
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="16" y1="96" x2="112" y2="24" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#2563eb"/>
+      <stop offset="50%" stop-color="#06b6d4"/>
+      <stop offset="100%" stop-color="#10b981"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="url(#bgGrad)"/>
+  <rect x="2" y="2" width="124" height="124" rx="26" stroke="#1e293b" stroke-width="2"/>
+  <rect x="20" y="74" width="22" height="10" rx="5" fill="#38bdf8" opacity="0.45"/>
+  <rect x="74" y="42" width="32" height="10" rx="5" fill="#10b981" opacity="0.85"/>
+  <path d="M 18 79 C 34 79, 36 47, 52 47 C 64 47, 66 47, 104 47" stroke="url(#accentGrad)" stroke-width="6" stroke-linecap="round" fill="none"/>
+  <line x1="52" y1="22" x2="52" y2="106" stroke="#f8fafc" stroke-width="2" opacity="0.35"/>
+  <circle cx="52" cy="47" r="11" fill="#10b981" opacity="0.25"/>
+  <circle cx="52" cy="47" r="7" fill="#10b981" stroke="#ecfdf5" stroke-width="2.5"/>
+</svg>
