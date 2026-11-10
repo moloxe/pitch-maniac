@@ -132,7 +132,7 @@ def download(
     out_path.mkdir(parents=True, exist_ok=True)
 
     # 1. Obtener metadatos
-    ydl_opts_info = {"quiet": quiet, "no_warnings": True}
+    ydl_opts_info = {"quiet": True, "no_warnings": True, "noprogress": True}
     with yt_dlp.YoutubeDL(ydl_opts_info) as ydl:
         info = ydl.extract_info(url, download=False)
         title = sanitize_filename(info.get("title") or vid or "track")
@@ -159,8 +159,9 @@ def download(
     ydl_opts_download = {
         "format": "bestaudio/best",
         "outtmpl": temp_template,
-        "quiet": quiet,
+        "quiet": True,
         "no_warnings": True,
+        "noprogress": True,
     }
     with yt_dlp.YoutubeDL(ydl_opts_download) as ydl:
         ydl.download([url])

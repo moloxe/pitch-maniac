@@ -232,17 +232,18 @@ async fn process_track<R: tauri::Runtime>(
 
     let stdout_str = String::from_utf8_lossy(&output.stdout);
     
-    // Find the JSON line in stdout (in case yt-dlp or libraries print extra non-JSON lines to stdout)
-    let json_line = stdout_str
-        .lines()
-        .rev()
-        .find(|line| {
-            let trimmed = line.trim();
-            trimmed.starts_with('{') && trimmed.ends_with('}')
-        })
-        .unwrap_or(stdout_str.trim());
+    // Find the JSON object anywhere in stdout (even if preceded or followed by other text/carriage returns)
+    let json_candidate = if let (Some(start_idx), Some(end_idx)) = (stdout_str.find('{'), stdout_str.rfind('}')) {
+        if start_idx < end_idx {
+            &stdout_str[start_idx..=end_idx]
+        } else {
+            stdout_str.trim()
+        }
+    } else {
+        stdout_str.trim()
+    };
 
-    let resp: ProcessResponse = serde_json::from_str(json_line)
+    let resp: ProcessResponse = serde_json::from_str(json_candidate)
         .map_err(|e| format!("Failed to parse process output: {e} -> {stdout_str}"))?;
 
     if let Some(song) = resp.song {
