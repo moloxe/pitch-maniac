@@ -110,16 +110,17 @@ export const App: React.FC = () => {
     }
   };
 
-  const handlePlayPause = () => {
+  const handlePlayPause = async () => {
     const player = playerRef.current;
     if (!player) return;
 
     if (isPlaying) {
       player.pause();
       setIsPlaying(false);
+      setCurrentTime(player.getCurrentTime());
     } else {
-      player.play();
-      setIsPlaying(true);
+      await player.play();
+      setIsPlaying(player.getIsPlaying());
     }
   };
 
@@ -133,7 +134,8 @@ export const App: React.FC = () => {
   const handleJump = (delta: number) => {
     const player = playerRef.current;
     if (!player) return;
-    const target = Math.max(0, Math.min(duration, currentTime + delta));
+    const cur = player.getCurrentTime();
+    const target = Math.max(0, Math.min(duration, cur + delta));
     player.seek(target);
     setCurrentTime(target);
   };
@@ -276,6 +278,7 @@ export const App: React.FC = () => {
           <PitchVisualizer
             frames={pitchFrames}
             currentTime={currentTime}
+            getCurrentTime={() => playerRef.current?.getCurrentTime() ?? 0}
             micMidi={micPitch.voiced ? micPitch.midi : null}
             micVoiced={micPitch.voiced}
             timeWindowSeconds={4.5}
@@ -287,6 +290,7 @@ export const App: React.FC = () => {
           <PlayerControls
             isPlaying={isPlaying}
             currentTime={currentTime}
+            getCurrentTime={() => playerRef.current?.getCurrentTime() ?? 0}
             duration={duration}
             vocalPresence={vocalPresence}
             lyricsOpen={lyricsOpen}

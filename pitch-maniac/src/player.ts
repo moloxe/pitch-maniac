@@ -72,12 +72,12 @@ export class DualTrackPlayer {
     }
   }
 
-  public play(offsetSeconds?: number) {
+  public async play(offsetSeconds?: number) {
     if (!this.ctx || !this.vocalsBuffer || !this.noVocalsBuffer) return;
     if (this.isPlaying) return;
 
     if (this.ctx.state === "suspended") {
-      this.ctx.resume();
+      await this.ctx.resume();
     }
 
     const startPos = offsetSeconds !== undefined ? offsetSeconds : this.pauseOffset;
@@ -125,30 +125,34 @@ export class DualTrackPlayer {
     this.startTracking();
   }
 
-  public pause() {
-    if (!this.isPlaying || !this.ctx) return;
-    this.pauseOffset = this.getCurrentTime();
-
+  private stopActiveSources() {
     if (this.vocalsSource) {
       try { this.vocalsSource.stop(); } catch { /* ignore */ }
       this.vocalsSource.disconnect();
       this.vocalsSource = null;
     }
     if (this.noVocalsSource) {
+      this.noVocalsSource.onended = null;
       try { this.noVocalsSource.stop(); } catch { /* ignore */ }
       this.noVocalsSource.disconnect();
       this.noVocalsSource = null;
     }
-
     this.isPlaying = false;
     this.stopTracking();
+  }
+
+  public pause() {
+    if (!this.isPlaying || !this.ctx) return;
+    this.pauseOffset = this.getCurrentTime();
+    this.stopActiveSources();
+    this.onTimeUpdateCallback?.(this.pauseOffset, this.duration);
   }
 
   public seek(targetSeconds: number) {
     const clamped = Math.max(0, Math.min(this.duration, targetSeconds));
     const wasPlaying = this.isPlaying;
     if (wasPlaying) {
-      this.pause();
+      this.stopActiveSources();
     }
     this.pauseOffset = clamped;
     if (wasPlaying) {
@@ -160,6 +164,7 @@ export class DualTrackPlayer {
   public stop() {
     this.pause();
     this.pauseOffset = 0;
+    this.onTimeUpdateCallback?.(0, this.duration);
   }
 
   public getCurrentTime(): number {
@@ -187,9 +192,14 @@ export class DualTrackPlayer {
 
   private startTracking() {
     this.stopTracking();
-    const tick = () => {
+    let lastEmitTime = 0;
+    const tick = (time: number) => {
       if (!this.isPlaying) return;
-      this.onTimeUpdateCallback?.(this.getCurrentTime(), this.duration);
+      // Throttle root callback updates to ~200ms (5Hz) to keep React thread fluid
+      if (time - lastEmitTime >= 200) {
+        this.onTimeUpdateCallback?.(this.getCurrentTime(), this.duration);
+        lastEmitTime = time;
+      }
       this.animFrameId = requestAnimationFrame(tick);
     };
     this.animFrameId = requestAnimationFrame(tick);
