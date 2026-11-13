@@ -79,15 +79,18 @@ fn get_python_binary() -> PathBuf {
 
 /// Finds the path to worker.py
 fn get_worker_script() -> PathBuf {
+    let manifest_rel = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../track_splitter/worker.py");
+    if manifest_rel.exists() {
+        if let Ok(canon) = manifest_rel.canonicalize() {
+            return canon;
+        }
+        return manifest_rel;
+    }
     let rel = Path::new("../../track_splitter/worker.py");
     if rel.exists() {
         if let Ok(canon) = rel.canonicalize() {
             return canon;
         }
-    }
-    let fallback = PathBuf::from("/Users/francomolochegarcia/dev/test-proj-26-11/track-splitter/track_splitter/worker.py");
-    if fallback.exists() {
-        return fallback;
     }
     PathBuf::from("track_splitter/worker.py")
 }

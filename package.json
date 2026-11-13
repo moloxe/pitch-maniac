@@ -1,0 +1,11 @@
+{
+  "name": "pitch-maniac-root",
+  "private": true,
+  "scripts": {
+    "dev": "bun run --cwd app tauri dev",
+    "dev:web": "bun run --cwd app dev",
+    "build": "bun run --cwd app build",
+    "tauri": "bun run --cwd app tauri",
+    "test": "python -m pytest"
+  }
+}
