@@ -9,6 +9,20 @@ import { LyricsSidebar } from "./components/LyricsSidebar";
 import { DualTrackPlayer } from "./player";
 import { useMicrophonePitch } from "./useMicrophonePitch";
 import { Mic, MicOff, AlertCircle } from "lucide-react";
+import {
+  LEFT_SIDEBAR_DEFAULT_WIDTH,
+  LEFT_SIDEBAR_MAX_WIDTH,
+  LEFT_SIDEBAR_MIN_WIDTH,
+  LEFT_SIDEBAR_STORAGE_KEY,
+  RIGHT_SIDEBAR_DEFAULT_WIDTH,
+  RIGHT_SIDEBAR_MAX_WIDTH,
+  RIGHT_SIDEBAR_MIN_WIDTH,
+  RIGHT_SIDEBAR_STORAGE_KEY,
+  clampSidebarWidth,
+  loadSavedSidebarWidth,
+  resolveSidebarWidths,
+  saveSidebarWidth,
+} from "./sidebarResize";
 import "./App.css";
 
 export const App: React.FC = () => {
@@ -24,6 +38,27 @@ export const App: React.FC = () => {
   const [transpose, setTranspose] = useState<number>(0); // -12 to +12 semitones
   const [speed, setSpeed] = useState<number>(1.0); // 0.50x to 1.50x
   const [lyricsOpen, setLyricsOpen] = useState<boolean>(false);
+
+  // Resizable sidebar widths
+  const [viewportWidth, setViewportWidth] = useState<number>(() =>
+    typeof window !== "undefined" ? window.innerWidth : 1280
+  );
+  const [leftWidth, setLeftWidth] = useState<number>(() =>
+    loadSavedSidebarWidth(
+      LEFT_SIDEBAR_STORAGE_KEY,
+      LEFT_SIDEBAR_DEFAULT_WIDTH,
+      LEFT_SIDEBAR_MIN_WIDTH,
+      LEFT_SIDEBAR_MAX_WIDTH
+    )
+  );
+  const [rightWidth, setRightWidth] = useState<number>(() =>
+    loadSavedSidebarWidth(
+      RIGHT_SIDEBAR_STORAGE_KEY,
+      RIGHT_SIDEBAR_DEFAULT_WIDTH,
+      RIGHT_SIDEBAR_MIN_WIDTH,
+      RIGHT_SIDEBAR_MAX_WIDTH
+    )
+  );
 
   // Processing state
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
@@ -70,6 +105,14 @@ export const App: React.FC = () => {
     return () => {
       if (unlisten) unlisten();
     };
+  }, []);
+
+  useEffect(() => {
+    const handleWindowResize = () => {
+      setViewportWidth(window.innerWidth);
+    };
+    window.addEventListener("resize", handleWindowResize);
+    return () => window.removeEventListener("resize", handleWindowResize);
   }, []);
 
   // Set up player callbacks
@@ -249,6 +292,53 @@ export const App: React.FC = () => {
     }
   };
 
+  const resolvedWidths = resolveSidebarWidths({
+    leftWidth,
+    rightWidth,
+    rightOpen: lyricsOpen,
+    viewportWidth,
+  });
+
+  const leftMaxWidth = clampSidebarWidth({
+    desiredWidth: LEFT_SIDEBAR_MAX_WIDTH,
+    minWidth: LEFT_SIDEBAR_MIN_WIDTH,
+    maxWidth: LEFT_SIDEBAR_MAX_WIDTH,
+    viewportWidth,
+    otherSidebarWidth: lyricsOpen ? resolvedWidths.rightWidth : 0,
+  });
+
+  const rightMaxWidth = clampSidebarWidth({
+    desiredWidth: RIGHT_SIDEBAR_MAX_WIDTH,
+    minWidth: RIGHT_SIDEBAR_MIN_WIDTH,
+    maxWidth: RIGHT_SIDEBAR_MAX_WIDTH,
+    viewportWidth,
+    otherSidebarWidth: resolvedWidths.leftWidth,
+  });
+
+  const handleLeftSidebarResize = (desiredWidth: number) => {
+    const next = clampSidebarWidth({
+      desiredWidth,
+      minWidth: LEFT_SIDEBAR_MIN_WIDTH,
+      maxWidth: LEFT_SIDEBAR_MAX_WIDTH,
+      viewportWidth,
+      otherSidebarWidth: lyricsOpen ? resolvedWidths.rightWidth : 0,
+    });
+    setLeftWidth(next);
+    saveSidebarWidth(LEFT_SIDEBAR_STORAGE_KEY, next);
+  };
+
+  const handleRightSidebarResize = (desiredWidth: number) => {
+    const next = clampSidebarWidth({
+      desiredWidth,
+      minWidth: RIGHT_SIDEBAR_MIN_WIDTH,
+      maxWidth: RIGHT_SIDEBAR_MAX_WIDTH,
+      viewportWidth,
+      otherSidebarWidth: resolvedWidths.leftWidth,
+    });
+    setRightWidth(next);
+    saveSidebarWidth(RIGHT_SIDEBAR_STORAGE_KEY, next);
+  };
+
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[#090d16] text-slate-100 antialiased font-sans">
       {/* Left Sidebar: Song stack & search */}
@@ -263,10 +353,14 @@ export const App: React.FC = () => {
         isProcessing={isProcessing}
         processingProgress={processingProgress}
         processingMessage={processingMessage}
+        width={resolvedWidths.leftWidth}
+        maxWidth={leftMaxWidth}
+        onResize={handleLeftSidebarResize}
+        onResetWidth={() => handleLeftSidebarResize(LEFT_SIDEBAR_DEFAULT_WIDTH)}
       />
 
       {/* Main Center Area */}
-      <div className="flex-1 flex flex-col h-full overflow-hidden p-4 space-y-4">
+      <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden p-4 space-y-4">
         {/* Top Header bar with song title and mic toggle */}
         <div className="flex items-center justify-between px-2">
           <div className="flex items-center space-x-3 overflow-hidden">
@@ -362,6 +456,10 @@ export const App: React.FC = () => {
         onSaveLyrics={handleSaveLyrics}
         onFetchLyrics={handleFetchLyrics}
         onClose={() => setLyricsOpen(false)}
+        width={resolvedWidths.rightWidth}
+        maxWidth={rightMaxWidth}
+        onResize={handleRightSidebarResize}
+        onResetWidth={() => handleRightSidebarResize(RIGHT_SIDEBAR_DEFAULT_WIDTH)}
       />
     </div>
   );

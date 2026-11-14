@@ -1,5 +1,11 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { X, Save, Check, Sparkles, Loader2, Edit3, AlignLeft } from "lucide-react";
+import { ResizeHandle } from "./ResizeHandle";
+import {
+  RIGHT_SIDEBAR_DEFAULT_WIDTH,
+  RIGHT_SIDEBAR_MAX_WIDTH,
+  RIGHT_SIDEBAR_MIN_WIDTH,
+} from "../sidebarResize";
 
 export interface SyncedLyricLine {
   time: number;
@@ -56,6 +62,10 @@ interface LyricsSidebarProps {
   onSaveLyrics: (lyrics: string) => Promise<boolean>;
   onFetchLyrics: () => Promise<{ found: boolean; error?: string }>;
   onClose: () => void;
+  width?: number;
+  maxWidth?: number;
+  onResize?: (desiredWidth: number) => void;
+  onResetWidth?: () => void;
 }
 
 export const LyricsSidebar: React.FC<LyricsSidebarProps> = ({
@@ -69,6 +79,10 @@ export const LyricsSidebar: React.FC<LyricsSidebarProps> = ({
   onSaveLyrics,
   onFetchLyrics,
   onClose,
+  width = RIGHT_SIDEBAR_DEFAULT_WIDTH,
+  maxWidth = RIGHT_SIDEBAR_MAX_WIDTH,
+  onResize,
+  onResetWidth,
 }) => {
   const [lyricsText, setLyricsText] = useState(initialLyrics || "");
   const [isSaving, setIsSaving] = useState(false);
@@ -140,7 +154,22 @@ export const LyricsSidebar: React.FC<LyricsSidebarProps> = ({
   };
 
   return (
-    <div className="w-80 h-full bg-slate-950/80 backdrop-blur-md border-l border-slate-800 flex flex-col shrink-0 animate-in slide-in-from-right duration-200">
+    <div
+      style={{ width: `${width}px` }}
+      className="relative h-full bg-slate-950/80 backdrop-blur-md border-l border-slate-800 flex flex-col shrink-0 animate-in slide-in-from-right duration-200"
+    >
+      {onResize && onResetWidth && (
+        <ResizeHandle
+          side="right"
+          width={width}
+          minWidth={RIGHT_SIDEBAR_MIN_WIDTH}
+          maxWidth={maxWidth}
+          defaultWidth={RIGHT_SIDEBAR_DEFAULT_WIDTH}
+          label="Resize lyrics sidebar"
+          onResize={onResize}
+          onReset={onResetWidth}
+        />
+      )}
       {/* Header */}
       <div className="p-4 border-b border-slate-800 flex items-center justify-between gap-2">
         <div className="overflow-hidden">

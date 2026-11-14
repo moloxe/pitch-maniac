@@ -3,6 +3,12 @@ import { Song, SearchResultItem } from "../types";
 import { Search, Trash2, Music, Plus, Video, FileAudio, Loader2 } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { ResizeHandle } from "./ResizeHandle";
+import {
+  LEFT_SIDEBAR_DEFAULT_WIDTH,
+  LEFT_SIDEBAR_MAX_WIDTH,
+  LEFT_SIDEBAR_MIN_WIDTH,
+} from "../sidebarResize";
 
 interface SidebarProps {
   songs: Song[];
@@ -15,6 +21,10 @@ interface SidebarProps {
   isProcessing: boolean;
   processingProgress: number;
   processingMessage: string;
+  width?: number;
+  maxWidth?: number;
+  onResize?: (desiredWidth: number) => void;
+  onResetWidth?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -28,6 +38,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isProcessing,
   processingProgress,
   processingMessage,
+  width = LEFT_SIDEBAR_DEFAULT_WIDTH,
+  maxWidth = LEFT_SIDEBAR_MAX_WIDTH,
+  onResize,
+  onResetWidth,
 }) => {
   const [filterQuery, setFilterQuery] = useState("");
   const [showAddModal, setShowAddModal] = useState(false);
@@ -71,7 +85,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   return (
-    <div className="w-80 h-full bg-slate-950/80 backdrop-blur-md border-r border-slate-800 flex flex-col shrink-0">
+    <div
+      style={{ width: `${width}px` }}
+      className="relative h-full bg-slate-950/80 backdrop-blur-md border-r border-slate-800 flex flex-col shrink-0"
+    >
+      {onResize && onResetWidth && (
+        <ResizeHandle
+          side="left"
+          width={width}
+          minWidth={LEFT_SIDEBAR_MIN_WIDTH}
+          maxWidth={maxWidth}
+          defaultWidth={LEFT_SIDEBAR_DEFAULT_WIDTH}
+          label="Resize library sidebar"
+          onResize={onResize}
+          onReset={onResetWidth}
+        />
+      )}
       {/* Header & Add Button */}
       <div className="p-4 border-b border-slate-800 flex items-center justify-between">
         <div className="flex items-center space-x-2.5">
@@ -220,7 +249,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   placeholder="https://www.youtube.com/watch?v=..."
                   value={ytUrlInput}
                   onChange={(e) => setYtUrlInput(e.target.value)}
-                  className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
+                  className="flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
                 />
                 <button
                   onClick={() => {
@@ -230,7 +259,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       setYtUrlInput("");
                     }
                   }}
-                  className="px-3 py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-semibold rounded-lg text-xs"
+                  className="shrink-0 px-3 py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-semibold rounded-lg text-xs"
                 >
                   Import
                 </button>
@@ -268,12 +297,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   placeholder="Search artist or title on YouTube..."
                   value={ytSearchQuery}
                   onChange={(e) => setYtSearchQuery(e.target.value)}
-                  className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
+                  className="flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
                 />
                 <button
                   type="submit"
                   disabled={isSearchingYt}
-                  className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold rounded-lg text-xs flex items-center space-x-1"
+                  className="shrink-0 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold rounded-lg text-xs flex items-center space-x-1"
                 >
                   {isSearchingYt ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
                   <span>Search</span>
