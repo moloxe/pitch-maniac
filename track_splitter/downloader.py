@@ -144,11 +144,29 @@ def download(
     if download_thumbnail and not thumb_path.exists():
         thumb_url = info.get("thumbnail") or (f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg" if vid else None)
         if thumb_url:
+            raw_thumb = out_path / "_thumb_raw"
             try:
                 import urllib.request
-                urllib.request.urlretrieve(thumb_url, str(thumb_path))
+                urllib.request.urlretrieve(thumb_url, str(raw_thumb))
+                with open(raw_thumb, "rb") as f:
+                    header = f.read(3)
+                if header == b"\xff\xd8\xff":
+                    shutil.move(str(raw_thumb), str(thumb_path))
+                else:
+                    # Convertir formatos como WebP/PNG a JPEG real para que coincida con thumb.jpg
+                    ffmpeg_bin = get_ffmpeg_bin()
+                    res = subprocess.run(
+                        [ffmpeg_bin, "-y", "-i", str(raw_thumb), "-frames:v", "1", "-q:v", "2", str(thumb_path)],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    if res.returncode != 0 or not thumb_path.exists():
+                        shutil.move(str(raw_thumb), str(thumb_path))
             except Exception:
                 pass
+            finally:
+                if raw_thumb.exists():
+                    raw_thumb.unlink(missing_ok=True)
 
     if final_audio_path.exists():
         return final_audio_path, thumb_path, info

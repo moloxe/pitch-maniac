@@ -35,6 +35,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [ytSearchQuery, setYtSearchQuery] = useState("");
   const [ytSearchResults, setYtSearchResults] = useState<SearchResultItem[]>([]);
   const [isSearchingYt, setIsSearchingYt] = useState(false);
+  const [failedThumbs, setFailedThumbs] = useState<Record<string, boolean>>({});
 
   const filteredSongs = songs.filter(
     (s) =>
@@ -147,14 +148,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <div className="flex items-center space-x-3 overflow-hidden flex-1">
                   {/* Thumbnail or Icon */}
                   <div className="w-11 h-11 rounded-lg bg-slate-800 flex items-center justify-center shrink-0 overflow-hidden border border-slate-700/60">
-                    {song.thumb_path ? (
+                    {song.thumb_path && !failedThumbs[song.thumb_path] ? (
                       <img
                         src={convertFileSrc(song.thumb_path)}
                         alt=""
                         className="w-full h-full object-cover"
-                        onError={(e) => {
-                          // Fallback to music icon
-                          (e.target as HTMLElement).style.display = "none";
+                        onError={() => {
+                          setFailedThumbs((prev) => ({
+                            ...prev,
+                            [song.thumb_path!]: true,
+                          }));
                         }}
                       />
                     ) : (
