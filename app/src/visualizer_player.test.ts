@@ -3,6 +3,11 @@ import {
   extractNoteSegments,
   midiToNoteName,
   transposeNoteMidi,
+  findTargetNoteMidiAtTime,
+  isMicPitchNearTarget,
+  stepSmoothMidi,
+  stepFadeProgress,
+  easeInOutCubic,
 } from "./components/PitchVisualizer";
 import {
   computeSliderFillRange,
@@ -471,5 +476,63 @@ describe("LyricsSidebar - LRC parsing and active line lookup", () => {
     expect(getActiveLyricIndex(lines, 15.0)).toBe(1);
     expect(getActiveLyricIndex(lines, 25.0)).toBe(2);
     expect(getActiveLyricIndex([], 10)).toBe(-1);
+  });
+});
+
+describe("PitchVisualizer - microphone proximity, smoothing & fade", () => {
+  it("finds active target note with transpose and grace window, returning null in silences", () => {
+    const segments = [
+      { id: 0, startTime: 2.0, endTime: 3.5, midi: 60 },
+      { id: 1, startTime: 5.0, endTime: 6.0, midi: 64 },
+    ];
+
+    expect(findTargetNoteMidiAtTime(segments, 2.5, 0)).toBe(60);
+    expect(findTargetNoteMidiAtTime(segments, 2.5, -2)).toBe(58);
+    expect(findTargetNoteMidiAtTime(segments, 1.92, 0)).toBe(60); // within 0.12s grace
+    expect(findTargetNoteMidiAtTime(segments, 1.0, 0)).toBeNull();
+    expect(findTargetNoteMidiAtTime(segments, 4.2, 0)).toBeNull();
+  });
+
+  it("shows mic pitch only when voiced and within 4 semitones of target note", () => {
+    expect(isMicPitchNearTarget(60, true, 60)).toBe(true);
+    expect(isMicPitchNearTarget(64, true, 60)).toBe(true); // exactly 4 semitones
+    expect(isMicPitchNearTarget(56, true, 60)).toBe(true);
+    expect(isMicPitchNearTarget(64.1, true, 60)).toBe(false);
+    expect(isMicPitchNearTarget(55.5, true, 60)).toBe(false);
+    expect(isMicPitchNearTarget(60, false, 60)).toBe(false);
+    expect(isMicPitchNearTarget(60, true, null)).toBe(false);
+  });
+
+  it("eases pitch movement smoothly without teleporting or overshooting", () => {
+    // Initial value snaps cleanly when null
+    expect(stepSmoothMidi(null, 62, 1 / 60)).toBe(62);
+
+    // Subsequent large jump moves gradually toward target
+    const step1 = stepSmoothMidi(60, 64, 1 / 60);
+    expect(step1).toBeGreaterThan(60);
+    expect(step1).toBeLessThan(62);
+
+    // Frame-rate independence: two 1/60s steps match one 2/60s step
+    const step2 = stepSmoothMidi(step1, 64, 1 / 60);
+    const singleDoubleDt = stepSmoothMidi(60, 64, 2 / 60);
+    expect(step2).toBeCloseTo(singleDoubleDt, 6);
+  });
+
+  it("fades in and out smoothly with easeInOutCubic", () => {
+    let p = 0;
+    p = stepFadeProgress(p, true, 0.06, 0.12, 0.16);
+    expect(p).toBeCloseTo(0.5, 4);
+    expect(easeInOutCubic(p)).toBeCloseTo(0.5, 4);
+
+    p = stepFadeProgress(p, true, 0.06, 0.12, 0.16);
+    expect(p).toBe(1);
+    expect(easeInOutCubic(p)).toBe(1);
+
+    p = stepFadeProgress(p, false, 0.08, 0.12, 0.16);
+    expect(p).toBeCloseTo(0.5, 4);
+
+    p = stepFadeProgress(p, false, 0.1, 0.12, 0.16);
+    expect(p).toBe(0);
+    expect(easeInOutCubic(p)).toBe(0);
   });
 });

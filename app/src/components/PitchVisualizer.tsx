@@ -92,6 +92,106 @@ export function transposeNoteMidi(midi: number, transposeSemitones: number): num
   return midi + transposeSemitones;
 }
 
+export const MAX_MIC_SEMITONE_DISTANCE = 4;
+export const TARGET_NOTE_GRACE_SECONDS = 0.12;
+export const MIC_PITCH_SMOOTH_TAU = 0.055;
+export const MIC_FADE_IN_SECONDS = 0.12;
+export const MIC_FADE_OUT_SECONDS = 0.16;
+
+export function easeOutCubic(t: number): number {
+  const clamped = Math.min(1, Math.max(0, t));
+  return 1 - Math.pow(1 - clamped, 3);
+}
+
+export function easeInOutCubic(t: number): number {
+  const clamped = Math.min(1, Math.max(0, t));
+  return clamped < 0.5
+    ? 4 * clamped * clamped * clamped
+    : 1 - Math.pow(-2 * clamped + 2, 3) / 2;
+}
+
+/**
+ * Exponential ease-out smoothing for continuous real-time pitch tracking.
+ * Frame-rate independent and overshoot-free.
+ */
+export function stepSmoothMidi(
+  currentMidi: number | null,
+  targetMidi: number,
+  dtSeconds: number,
+  tau = MIC_PITCH_SMOOTH_TAU
+): number {
+  if (currentMidi === null || !Number.isFinite(currentMidi) || dtSeconds <= 0 || tau <= 0) {
+    return targetMidi;
+  }
+  const alpha = 1 - Math.exp(-dtSeconds / tau);
+  return currentMidi + (targetMidi - currentMidi) * alpha;
+}
+
+export function stepFadeProgress(
+  currentProgress: number,
+  visible: boolean,
+  dtSeconds: number,
+  fadeInSeconds = MIC_FADE_IN_SECONDS,
+  fadeOutSeconds = MIC_FADE_OUT_SECONDS
+): number {
+  if (dtSeconds <= 0) {
+    return Math.min(1, Math.max(0, currentProgress));
+  }
+  if (visible) {
+    const step = fadeInSeconds > 0 ? dtSeconds / fadeInSeconds : 1;
+    return Math.min(1, Math.max(0, currentProgress + step));
+  }
+  const step = fadeOutSeconds > 0 ? dtSeconds / fadeOutSeconds : 1;
+  return Math.min(1, Math.max(0, currentProgress - step));
+}
+
+export function findTargetNoteMidiAtTime(
+  segments: NoteSegment[],
+  currentTime: number,
+  transposeSemitones = 0,
+  graceSeconds = TARGET_NOTE_GRACE_SECONDS
+): number | null {
+  if (!segments || segments.length === 0) return null;
+
+  let closestSeg: NoteSegment | null = null;
+  let closestDist = Infinity;
+
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    if (seg.startTime <= currentTime && seg.endTime >= currentTime) {
+      return transposeNoteMidi(seg.midi, transposeSemitones);
+    }
+
+    if (seg.startTime > currentTime + graceSeconds) {
+      break;
+    }
+
+    const dist =
+      currentTime < seg.startTime
+        ? seg.startTime - currentTime
+        : currentTime - seg.endTime;
+
+    if (dist <= graceSeconds && dist < closestDist) {
+      closestDist = dist;
+      closestSeg = seg;
+    }
+  }
+
+  return closestSeg ? transposeNoteMidi(closestSeg.midi, transposeSemitones) : null;
+}
+
+export function isMicPitchNearTarget(
+  micMidi: number | null,
+  micVoiced: boolean,
+  targetMidi: number | null,
+  maxSemitones = MAX_MIC_SEMITONE_DISTANCE
+): boolean {
+  if (!micVoiced || micMidi === null || !Number.isFinite(micMidi) || targetMidi === null) {
+    return false;
+  }
+  return Math.abs(micMidi - targetMidi) <= maxSemitones;
+}
+
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
 export function midiToNoteName(midi: number): string {
@@ -141,6 +241,17 @@ export const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
     dpr: 1,
   });
 
+  // Smoothed mic pitch & fade state across animation frames
+  const micAnimRef = useRef<{
+    smoothedMidi: number | null;
+    fadeProgress: number;
+    lastTimestamp: number | null;
+  }>({
+    smoothedMidi: null,
+    fadeProgress: 0,
+    lastTimestamp: null,
+  });
+
   // Track container resize responsively and update canvas buffer dimensions
   useEffect(() => {
     const container = containerRef.current;
@@ -181,10 +292,17 @@ export const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
 
     let animId: number;
 
-    const render = () => {
+    const render = (now: number) => {
       if (!canvas) return;
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
+
+      const animState = micAnimRef.current;
+      const dtSeconds =
+        animState.lastTimestamp !== null
+          ? Math.min(0.05, Math.max(0, (now - animState.lastTimestamp) / 1000))
+          : 1 / 60;
+      animState.lastTimestamp = now;
 
       const { width, height, dpr } = sizeRef.current;
       if (width <= 0 || height <= 0) {
@@ -291,9 +409,38 @@ export const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
       ctx.shadowBlur = 0;
 
       // Draw singer's real-time microphone pitch dot / indicator at headX
+      // Only shown when within MAX_MIC_SEMITONE_DISTANCE of the current target note,
+      // with eased motion and quick fade in/out.
       const { midi: micM, voiced: micV } = micRef.current;
-      if (micV && micM !== null && micM >= minMidi && micM <= maxMidi) {
-        const micY = height - ((micM - minMidi) / midiRange) * height;
+      const targetMidi = findTargetNoteMidiAtTime(segments, curTime, activeTranspose);
+      const inRange =
+        isMicPitchNearTarget(micM, micV, targetMidi) &&
+        micM !== null &&
+        micM >= minMidi &&
+        micM <= maxMidi;
+
+      if (inRange && micM !== null) {
+        if (animState.fadeProgress <= 0.001 || animState.smoothedMidi === null) {
+          animState.smoothedMidi = micM;
+        } else {
+          animState.smoothedMidi = stepSmoothMidi(animState.smoothedMidi, micM, dtSeconds);
+        }
+      }
+
+      animState.fadeProgress = stepFadeProgress(animState.fadeProgress, inRange, dtSeconds);
+
+      if (animState.fadeProgress <= 0.001) {
+        animState.smoothedMidi = null;
+      } else if (
+        animState.smoothedMidi !== null &&
+        animState.smoothedMidi >= minMidi &&
+        animState.smoothedMidi <= maxMidi
+      ) {
+        const fadeAlpha = easeInOutCubic(animState.fadeProgress);
+        const micY = height - ((animState.smoothedMidi - minMidi) / midiRange) * height;
+
+        ctx.save();
+        ctx.globalAlpha = fadeAlpha;
 
         // Glow ring
         ctx.fillStyle = "#ec4899";
@@ -312,14 +459,16 @@ export const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
         // Note label next to singer's pitch
         ctx.fillStyle = "#fb7185";
         ctx.font = "bold 11px sans-serif";
-        ctx.fillText(midiToNoteName(micM), headX + 14, micY + 4);
+        ctx.fillText(midiToNoteName(animState.smoothedMidi), headX + 14, micY + 4);
+
+        ctx.restore();
       }
 
       ctx.restore();
       animId = requestAnimationFrame(render);
     };
 
-    render();
+    animId = requestAnimationFrame(render);
 
     return () => {
       cancelAnimationFrame(animId);
