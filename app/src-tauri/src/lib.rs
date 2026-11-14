@@ -15,6 +15,7 @@ pub struct Song {
     pub pitch_path: String,
     pub thumb_path: Option<String>,
     pub lyrics: Option<String>,
+    pub synced_lyrics: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -40,6 +41,16 @@ pub struct ListResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SimpleResponse {
     pub success: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FetchLyricsResponse {
+    pub success: bool,
+    pub found: bool,
+    pub lyrics: String,
+    pub synced_lyrics: Option<String>,
+    pub source: Option<String>,
     pub error: Option<String>,
 }
 
@@ -184,6 +195,29 @@ async fn save_lyrics(song_id: String, lyrics: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
+async fn fetch_lyrics(song_id: String) -> Result<FetchLyricsResponse, String> {
+    let py = get_python_binary();
+    let script = get_worker_script();
+
+    let output = Command::new(&py)
+        .arg(&script)
+        .arg("fetch-lyrics")
+        .arg(&song_id)
+        .output()
+        .map_err(|e| format!("Failed to fetch lyrics: {e}"))?;
+
+    let stdout_str = String::from_utf8_lossy(&output.stdout);
+    let resp: FetchLyricsResponse = serde_json::from_str(&stdout_str)
+        .map_err(|e| format!("Invalid fetch-lyrics JSON: {e} -> {stdout_str}"))?;
+
+    if !resp.success {
+        return Err(resp.error.unwrap_or_else(|| "Failed to fetch lyrics".into()));
+    }
+
+    Ok(resp)
+}
+
+#[tauri::command]
 async fn process_track<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     source: String,
@@ -280,6 +314,7 @@ pub fn run() {
             search_youtube,
             delete_song,
             save_lyrics,
+            fetch_lyrics,
             process_track,
             read_local_file_base64,
             read_text_file

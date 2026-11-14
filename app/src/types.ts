@@ -8,6 +8,16 @@ export interface Song {
   pitch_path: string;
   thumb_path?: string | null;
   lyrics?: string | null;
+  synced_lyrics?: string | null;
+}
+
+export interface FetchLyricsResult {
+  success: boolean;
+  found: boolean;
+  lyrics: string;
+  synced_lyrics?: string | null;
+  source?: string | null;
+  error?: string | null;
 }
 
 export interface PitchFrame {

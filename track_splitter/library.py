@@ -69,13 +69,20 @@ def delete_song(song_id: str, lib_dir: Optional[Path] = None) -> bool:
     return True
 
 
-def save_song_lyrics(song_id: str, lyrics: str, lib_dir: Optional[Path] = None) -> bool:
+def save_song_lyrics(
+    song_id: str,
+    lyrics: str,
+    lib_dir: Optional[Path] = None,
+    synced_lyrics: Optional[str] = None,
+) -> bool:
     ld = lib_dir or get_library_dir()
     songs = load_library(ld)
     found = False
     for s in songs:
         if s.get("id") == song_id:
             s["lyrics"] = lyrics
+            if synced_lyrics is not None:
+                s["synced_lyrics"] = synced_lyrics
             found = True
             break
     if found:

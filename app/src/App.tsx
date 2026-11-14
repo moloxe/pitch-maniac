@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Song, PitchFrame, PitchData, SearchResultItem, ProgressEventPayload } from "./types";
+import { Song, PitchFrame, PitchData, SearchResultItem, ProgressEventPayload, FetchLyricsResult } from "./types";
 import { Sidebar } from "./components/Sidebar";
 import { PitchVisualizer } from "./components/PitchVisualizer";
 import { PlayerControls } from "./components/PlayerControls";
@@ -225,6 +225,30 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleFetchLyrics = async (): Promise<{ found: boolean; error?: string }> => {
+    if (!activeSong) return { found: false, error: "No song selected." };
+    try {
+      const res = await invoke<FetchLyricsResult>("fetch_lyrics", {
+        songId: activeSong.id,
+      });
+      if (res.found) {
+        const updatedSong: Song = {
+          ...activeSong,
+          lyrics: res.lyrics,
+          synced_lyrics: res.synced_lyrics ?? activeSong.synced_lyrics ?? null,
+        };
+        setActiveSong(updatedSong);
+        setSongs((prev) =>
+          prev.map((s) => (s.id === activeSong.id ? updatedSong : s))
+        );
+      }
+      return { found: res.found };
+    } catch (err) {
+      console.error("Error fetching lyrics:", err);
+      return { found: false, error: String(err) };
+    }
+  };
+
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[#090d16] text-slate-100 antialiased font-sans">
       {/* Left Sidebar: Song stack & search */}
@@ -329,9 +353,14 @@ export const App: React.FC = () => {
       {/* Right Sidebar: Lyrics */}
       <LyricsSidebar
         isOpen={lyricsOpen}
+        songId={activeSong?.id || null}
         songTitle={activeSong?.title || ""}
         initialLyrics={activeSong?.lyrics || ""}
+        initialSyncedLyrics={activeSong?.synced_lyrics || ""}
+        currentTime={currentTime}
+        onSeek={handleSeek}
         onSaveLyrics={handleSaveLyrics}
+        onFetchLyrics={handleFetchLyrics}
         onClose={() => setLyricsOpen(false)}
       />
     </div>

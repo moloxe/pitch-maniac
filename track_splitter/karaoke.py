@@ -12,6 +12,7 @@ from .downloader import download, is_youtube_url, convert_to_wav, sanitize_filen
 from .engine import separate_demucs, separate_roformer_vocals, resolve_device, load_wav, save_wav_f32
 from .pitch import extract_pitch_yin, save_pitch_json
 from .library import get_library_dir, upsert_song
+from .lyrics import fetch_lyrics
 
 
 def separate_karaoke_pair(
@@ -152,6 +153,23 @@ def separate_karaoke_pair(
     info_audio = torchaudio.info(str(vocals_path))
     duration = round(info_audio.num_frames / info_audio.sample_rate, 2)
 
+    report("Fetching lyrics...", 0.9)
+    yt_source = source_str if is_youtube_url(source_str) else None
+    lyrics_text = ""
+    synced_lyrics_text: Optional[str] = None
+    try:
+        lyr_res = fetch_lyrics(
+            title=title,
+            artist=artist,
+            duration=duration,
+            source_url=yt_source,
+        )
+        if lyr_res.get("found"):
+            lyrics_text = lyr_res.get("lyrics") or ""
+            synced_lyrics_text = lyr_res.get("synced_lyrics")
+    except Exception:
+        pass
+
     song_record = {
         "id": song_id,
         "title": title,
@@ -161,7 +179,9 @@ def separate_karaoke_pair(
         "no_vocals_path": str(no_vocals_path),
         "pitch_path": str(pitch_json_path),
         "thumb_path": str(thumb_path) if thumb_path and thumb_path.exists() else None,
-        "lyrics": "",
+        "lyrics": lyrics_text,
+        "synced_lyrics": synced_lyrics_text,
+        "source_url": yt_source,
     }
 
     upsert_song(song_record)

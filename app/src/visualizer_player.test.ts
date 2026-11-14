@@ -10,6 +10,10 @@ import {
   formatTransposeLabel,
 } from "./components/PlayerControls";
 import {
+  parseLrcLyrics,
+  getActiveLyricIndex,
+} from "./components/LyricsSidebar";
+import {
   StereoTimePitchProcessor,
   clampSpeed,
   clampTranspose,
@@ -433,5 +437,39 @@ describe("Audio DSP - StereoTimePitchProcessor", () => {
       proc.processBlock(outL, outR, blockSize);
     }
     expect(proc.isEnded()).toBe(true);
+  });
+});
+
+describe("LyricsSidebar - LRC parsing and active line lookup", () => {
+  it("parses LRC timestamps including multi-tag lines and metadata filtering", () => {
+    const lrc = [
+      "[ar:Amén]",
+      "[ti:Te Quiero]",
+      "[00:05.50] First line",
+      "[00:10.00][00:45.250] Repeated chorus",
+      "[00:20] No fraction",
+    ].join("\n");
+
+    const parsed = parseLrcLyrics(lrc);
+    expect(parsed).toEqual([
+      { time: 5.5, text: "First line" },
+      { time: 10, text: "Repeated chorus" },
+      { time: 20, text: "No fraction" },
+      { time: 45.25, text: "Repeated chorus" },
+    ]);
+  });
+
+  it("finds the active lyric line index for currentTime", () => {
+    const lines = [
+      { time: 5, text: "Line 1" },
+      { time: 12.5, text: "Line 2" },
+      { time: 20, text: "Line 3" },
+    ];
+    expect(getActiveLyricIndex(lines, 0)).toBe(-1);
+    expect(getActiveLyricIndex(lines, 5.0)).toBe(0);
+    expect(getActiveLyricIndex(lines, 12.46)).toBe(1);
+    expect(getActiveLyricIndex(lines, 15.0)).toBe(1);
+    expect(getActiveLyricIndex(lines, 25.0)).toBe(2);
+    expect(getActiveLyricIndex([], 10)).toBe(-1);
   });
 });
