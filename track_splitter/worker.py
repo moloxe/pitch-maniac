@@ -7,7 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from track_splitter.downloader import search
-from track_splitter.library import load_library, delete_song, save_song_lyrics, get_song
+from track_splitter.library import load_library, delete_song, save_song_lyrics, get_song, reorder_songs
 from track_splitter.karaoke import separate_karaoke_pair
 from track_splitter.lyrics import fetch_lyrics
 
@@ -42,6 +42,10 @@ def main():
     s_p = subparsers.add_parser("search")
     s_p.add_argument("query", help="YouTube search query")
     s_p.add_argument("--limit", type=int, default=10, help="Max results")
+
+    # Command: reorder
+    reord_p = subparsers.add_parser("reorder")
+    reord_p.add_argument("song_ids", nargs="*", help="Ordered song IDs")
 
     args = parser.parse_args()
 
@@ -111,6 +115,10 @@ def main():
     elif args.command == "search":
         results = search(args.query, limit=args.limit)
         print(json.dumps({"success": True, "results": results}))
+
+    elif args.command == "reorder":
+        reorder_songs(args.song_ids)
+        print(json.dumps({"success": True}))
 
     else:
         parser.print_help()

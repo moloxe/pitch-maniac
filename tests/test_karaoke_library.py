@@ -2,7 +2,7 @@ import json
 import pytest
 from pathlib import Path
 from track_splitter.pitch import hz_to_midi, extract_pitch_yin, save_pitch_json
-from track_splitter.library import get_library_dir, save_library, load_library, upsert_song, delete_song, save_song_lyrics
+from track_splitter.library import get_library_dir, save_library, load_library, upsert_song, delete_song, save_song_lyrics, reorder_songs
 from track_splitter import lyrics as lyrics_mod
 
 
@@ -39,6 +39,32 @@ def test_library_crud(tmp_path):
 
     assert delete_song("song1", tmp_path) is True
     assert len(load_library(tmp_path)) == 0
+
+
+def test_library_reorder_songs(tmp_path):
+    for sid in ["song1", "song2", "song3"]:
+        upsert_song(
+            {
+                "id": sid,
+                "title": f"Title {sid}",
+                "artist": "Artist",
+                "duration": 100.0,
+                "vocals_path": str(tmp_path / sid / "vocals.wav"),
+                "no_vocals_path": str(tmp_path / sid / "no_vocals.wav"),
+                "pitch_path": str(tmp_path / sid / "pitch.json"),
+            },
+            tmp_path,
+        )
+
+    assert [s["id"] for s in load_library(tmp_path)] == ["song3", "song2", "song1"]
+
+    reordered = reorder_songs(["song1", "song3", "song2"], tmp_path)
+    assert [s["id"] for s in reordered] == ["song1", "song3", "song2"]
+    assert [s["id"] for s in load_library(tmp_path)] == ["song1", "song3", "song2"]
+
+    # Partial list moves specified IDs first and preserves remaining tracks
+    partial = reorder_songs(["song2"], tmp_path)
+    assert [s["id"] for s in partial] == ["song2", "song1", "song3"]
 
 
 def test_lyrics_cleaning_and_lrc_stripping():

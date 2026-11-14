@@ -89,3 +89,32 @@ def save_song_lyrics(
         save_library(songs, ld)
     return found
 
+
+def reorder_songs(
+    song_ids: List[str], lib_dir: Optional[Path] = None
+) -> List[Dict[str, Any]]:
+    ld = lib_dir or get_library_dir()
+    songs = load_library(ld)
+    if not songs or not song_ids:
+        return songs
+
+    by_id = {s.get("id"): s for s in songs if s.get("id") is not None}
+    reordered: List[Dict[str, Any]] = []
+    seen = set()
+
+    for sid in song_ids:
+        if sid in by_id and sid not in seen:
+            reordered.append(by_id[sid])
+            seen.add(sid)
+
+    for s in songs:
+        sid = s.get("id")
+        if sid not in seen:
+            reordered.append(s)
+            if sid is not None:
+                seen.add(sid)
+
+    save_library(reordered, ld)
+    return reordered
+
+

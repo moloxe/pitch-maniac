@@ -175,6 +175,33 @@ async fn delete_song(song_id: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
+async fn reorder_songs(song_ids: Vec<String>) -> Result<bool, String> {
+    let py = get_python_binary();
+    let script = get_worker_script();
+
+    let mut cmd = Command::new(&py);
+    cmd.arg(&script).arg("reorder");
+    for id in &song_ids {
+        cmd.arg(id);
+    }
+
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Failed to reorder songs: {e}"))?;
+
+    if !output.status.success() {
+        let err_msg = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Worker reorder failed: {err_msg}"));
+    }
+
+    let stdout_str = String::from_utf8_lossy(&output.stdout);
+    let resp: SimpleResponse = serde_json::from_str(&stdout_str)
+        .map_err(|e| format!("Invalid reorder JSON: {e} -> {stdout_str}"))?;
+
+    Ok(resp.success)
+}
+
+#[tauri::command]
 async fn save_lyrics(song_id: String, lyrics: String) -> Result<bool, String> {
     let py = get_python_binary();
     let script = get_worker_script();
@@ -313,6 +340,7 @@ pub fn run() {
             list_songs,
             search_youtube,
             delete_song,
+            reorder_songs,
             save_lyrics,
             fetch_lyrics,
             process_track,

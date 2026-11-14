@@ -1,6 +1,6 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Song, SearchResultItem } from "../types";
-import { Search, Trash2, Music, Plus, Video, FileAudio, Loader2 } from "lucide-react";
+import { Search, Trash2, Music, Plus, Video, FileAudio, Loader2, GripVertical } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ResizeHandle } from "./ResizeHandle";
@@ -9,12 +9,19 @@ import {
   LEFT_SIDEBAR_MAX_WIDTH,
   LEFT_SIDEBAR_MIN_WIDTH,
 } from "../sidebarResize";
+import {
+  computeInsertionSlot,
+  reorderSongList,
+  slotToTargetIndex,
+} from "../playerSettings";
 
 interface SidebarProps {
   songs: Song[];
   activeSongId: string | null;
   onSelectSong: (song: Song) => void;
   onDeleteSong: (id: string) => void;
+  onReorderSongs?: (reordered: Song[]) => void;
+  onModalOpenChange?: (open: boolean) => void;
   onAddFromUrl: (url: string) => void;
   onAddFromFile: (filePath: string) => void;
   onSearchYoutube: (query: string) => Promise<SearchResultItem[]>;
@@ -27,11 +34,33 @@ interface SidebarProps {
   onResetWidth?: () => void;
 }
 
+interface DragRenderState {
+  songId: string;
+  fromIndex: number;
+  insertionSlot: number;
+  deltaY: number;
+  indicatorTop: number | null;
+}
+
+interface DragSession {
+  pointerId: number;
+  songId: string;
+  fromIndex: number;
+  startY: number;
+  lastClientY: number;
+  startScrollTop: number;
+  threshold: number;
+  active: boolean;
+  insertionSlot: number;
+}
+
 export const Sidebar: React.FC<SidebarProps> = ({
   songs,
   activeSongId,
   onSelectSong,
   onDeleteSong,
+  onReorderSongs,
+  onModalOpenChange,
   onAddFromUrl,
   onAddFromFile,
   onSearchYoutube,
@@ -50,12 +79,283 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [ytSearchResults, setYtSearchResults] = useState<SearchResultItem[]>([]);
   const [isSearchingYt, setIsSearchingYt] = useState(false);
   const [failedThumbs, setFailedThumbs] = useState<Record<string, boolean>>({});
+  const [dragState, setDragState] = useState<DragRenderState | null>(null);
+
+  const listContainerRef = useRef<HTMLDivElement | null>(null);
+  const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const dragSessionRef = useRef<DragSession | null>(null);
+  const suppressNextClickRef = useRef<boolean>(false);
+  const dragCleanupRef = useRef<(() => void) | null>(null);
 
   const filteredSongs = songs.filter(
     (s) =>
       s.title.toLowerCase().includes(filterQuery.toLowerCase()) ||
       s.artist.toLowerCase().includes(filterQuery.toLowerCase())
   );
+
+  const songsRef = useRef(songs);
+  songsRef.current = songs;
+  const filteredSongsRef = useRef(filteredSongs);
+  filteredSongsRef.current = filteredSongs;
+  const onReorderSongsRef = useRef(onReorderSongs);
+  onReorderSongsRef.current = onReorderSongs;
+
+  useEffect(() => {
+    onModalOpenChange?.(showAddModal);
+  }, [showAddModal, onModalOpenChange]);
+
+  useEffect(() => {
+    return () => {
+      onModalOpenChange?.(false);
+      dragCleanupRef.current?.();
+    };
+  }, [onModalOpenChange]);
+
+  const computeIndicatorTop = (
+    slot: number,
+    fromIndex: number,
+    rects: Array<{ top: number; bottom: number; height: number }>
+  ): number | null => {
+    if (slot === fromIndex || slot === fromIndex + 1 || rects.length === 0) {
+      return null;
+    }
+    const container = listContainerRef.current;
+    if (!container) return null;
+    const containerRect = container.getBoundingClientRect();
+    const scrollTop = container.scrollTop;
+
+    if (slot <= 0) {
+      return rects[0].top - containerRect.top + scrollTop - 2;
+    }
+    if (slot >= rects.length) {
+      return rects[rects.length - 1].bottom - containerRect.top + scrollTop + 2;
+    }
+    const midpoint = (rects[slot - 1].bottom + rects[slot].top) / 2;
+    return midpoint - containerRect.top + scrollTop;
+  };
+
+  const handleRowPointerDown = (
+    e: React.PointerEvent<HTMLDivElement>,
+    song: Song,
+    index: number
+  ) => {
+    if (e.button !== 0) return;
+    if (!onReorderSongsRef.current || filteredSongsRef.current.length <= 1) return;
+
+    const targetEl = e.target as HTMLElement | null;
+    if (targetEl?.closest("[data-delete-song]")) return;
+
+    const isHandle = Boolean(targetEl?.closest("[data-drag-handle]"));
+    if (isHandle) {
+      e.preventDefault();
+    }
+
+    dragCleanupRef.current?.();
+
+    const container = listContainerRef.current;
+    const session: DragSession = {
+      pointerId: e.pointerId,
+      songId: song.id,
+      fromIndex: index,
+      startY: e.clientY,
+      lastClientY: e.clientY,
+      startScrollTop: container?.scrollTop ?? 0,
+      threshold: isHandle ? 2 : 5,
+      active: false,
+      insertionSlot: index,
+    };
+    dragSessionRef.current = session;
+
+    const prevCursor = document.body.style.cursor;
+    const prevUserSelect = document.body.style.userSelect;
+    let rafId: number | null = null;
+    let lastFrameTs = 0;
+
+    const updateDragVisuals = (clientY: number) => {
+      const visible = filteredSongsRef.current;
+      const rects = visible.map((s) => {
+        const el = rowRefs.current.get(s.id);
+        if (!el) return { top: 0, bottom: 0, height: 0 };
+        const r = el.getBoundingClientRect();
+        return { top: r.top, bottom: r.bottom, height: r.height };
+      });
+      const slot = computeInsertionSlot(clientY, rects);
+      const scrollDelta = (listContainerRef.current?.scrollTop ?? 0) - session.startScrollTop;
+      const deltaY = clientY - session.startY + scrollDelta;
+      session.insertionSlot = slot;
+      setDragState({
+        songId: session.songId,
+        fromIndex: session.fromIndex,
+        insertionSlot: slot,
+        deltaY,
+        indicatorTop: computeIndicatorTop(slot, session.fromIndex, rects),
+      });
+    };
+
+    const stopAutoScroll = () => {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      lastFrameTs = 0;
+    };
+
+    const runAutoScroll = (ts: number) => {
+      if (!session.active) {
+        stopAutoScroll();
+        return;
+      }
+      const scroller = listContainerRef.current;
+      if (scroller && scroller.scrollHeight > scroller.clientHeight) {
+        const dt = lastFrameTs > 0 ? Math.min(0.05, (ts - lastFrameTs) / 1000) : 1 / 60;
+        lastFrameTs = ts;
+        const rect = scroller.getBoundingClientRect();
+        const edgeZone = Math.min(44, rect.height / 3);
+        let speedPxPerSec = 0;
+
+        if (session.lastClientY < rect.top + edgeZone) {
+          const depth = Math.min(2, (rect.top + edgeZone - session.lastClientY) / Math.max(1, edgeZone));
+          speedPxPerSec = -320 * depth;
+        } else if (session.lastClientY > rect.bottom - edgeZone) {
+          const depth = Math.min(2, (session.lastClientY - (rect.bottom - edgeZone)) / Math.max(1, edgeZone));
+          speedPxPerSec = 320 * depth;
+        }
+
+        if (speedPxPerSec !== 0) {
+          const before = scroller.scrollTop;
+          scroller.scrollTop += speedPxPerSec * dt;
+          if (scroller.scrollTop !== before) {
+            updateDragVisuals(session.lastClientY);
+          }
+        }
+      }
+      rafId = requestAnimationFrame(runAutoScroll);
+    };
+
+    const cleanup = () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerCancel);
+      window.removeEventListener("keydown", handleEscapeKey);
+      stopAutoScroll();
+      if (session.active) {
+        document.body.style.cursor = prevCursor;
+        document.body.style.userSelect = prevUserSelect;
+      }
+      dragSessionRef.current = null;
+      dragCleanupRef.current = null;
+      setDragState(null);
+    };
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      if (moveEvent.pointerId !== session.pointerId) return;
+      session.lastClientY = moveEvent.clientY;
+
+      if (!session.active) {
+        if (Math.abs(moveEvent.clientY - session.startY) < session.threshold) {
+          return;
+        }
+        session.active = true;
+        document.body.style.cursor = "grabbing";
+        document.body.style.userSelect = "none";
+        window.getSelection?.()?.removeAllRanges();
+        rafId = requestAnimationFrame(runAutoScroll);
+      }
+
+      updateDragVisuals(moveEvent.clientY);
+    };
+
+    const finishDrag = (commit: boolean) => {
+      const wasActive = session.active;
+      const finalSlot = session.insertionSlot;
+      const fromIndex = session.fromIndex;
+      const draggedId = session.songId;
+
+      cleanup();
+
+      if (wasActive) {
+        suppressNextClickRef.current = true;
+        window.setTimeout(() => {
+          suppressNextClickRef.current = false;
+        }, 0);
+
+        if (commit) {
+          const visible = filteredSongsRef.current;
+          const targetIndex = slotToTargetIndex(finalSlot, fromIndex, visible.length);
+          if (targetIndex !== fromIndex) {
+            const reordered = reorderSongList(
+              songsRef.current,
+              draggedId,
+              targetIndex,
+              visible.map((s) => s.id)
+            );
+            onReorderSongsRef.current?.(reordered);
+          }
+        }
+      }
+    };
+
+    const handlePointerUp = (upEvent: PointerEvent) => {
+      if (upEvent.pointerId !== session.pointerId) return;
+      finishDrag(true);
+    };
+
+    const handlePointerCancel = (cancelEvent: PointerEvent) => {
+      if (cancelEvent.pointerId !== session.pointerId) return;
+      finishDrag(false);
+    };
+
+    const handleEscapeKey = (keyEvent: KeyboardEvent) => {
+      if (keyEvent.key === "Escape" && session.active) {
+        keyEvent.preventDefault();
+        keyEvent.stopPropagation();
+        finishDrag(false);
+      }
+    };
+
+    dragCleanupRef.current = cleanup;
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerCancel);
+    window.addEventListener("keydown", handleEscapeKey, true);
+  };
+
+  const handleRowKeyDown = (
+    e: React.KeyboardEvent<HTMLDivElement>,
+    song: Song,
+    index: number
+  ) => {
+    if (
+      e.altKey &&
+      !e.metaKey &&
+      !e.ctrlKey &&
+      (e.key === "ArrowUp" || e.key === "ArrowDown")
+    ) {
+      if (!onReorderSongs || filteredSongs.length <= 1) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const delta = e.key === "ArrowUp" ? -1 : 1;
+      const targetIndex = Math.max(0, Math.min(filteredSongs.length - 1, index + delta));
+      if (targetIndex !== index) {
+        const reordered = reorderSongList(
+          songs,
+          song.id,
+          targetIndex,
+          filteredSongs.map((s) => s.id)
+        );
+        onReorderSongs(reordered);
+        requestAnimationFrame(() => {
+          rowRefs.current.get(song.id)?.focus({ preventScroll: true });
+        });
+      }
+      return;
+    }
+
+    if (e.key === "Enter" && e.target === e.currentTarget) {
+      e.preventDefault();
+      onSelectSong(song);
+    }
+  };
 
   const handlePickLocalFile = async () => {
     try {
@@ -156,32 +456,85 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* Cached Song Stack */}
-      <div className="flex-1 overflow-y-auto p-2 space-y-1">
+      <div
+        ref={listContainerRef}
+        className="relative flex-1 overflow-y-auto p-2 space-y-1"
+      >
+        {dragState && dragState.indicatorTop !== null && (
+          <div
+            aria-hidden="true"
+            className="absolute left-2 right-2 h-0.5 bg-cyan-400 rounded-full shadow-[0_0_8px_rgba(34,211,238,0.85)] pointer-events-none z-40"
+            style={{ top: `${dragState.indicatorTop}px` }}
+          >
+            <span className="absolute -left-1 -top-[3px] w-2 h-2 rounded-full bg-cyan-300 border border-slate-950" />
+          </div>
+        )}
+
         {filteredSongs.length === 0 ? (
           <div className="text-center py-12 px-4 text-slate-500 text-xs">
             {songs.length === 0 ? "No songs in library yet. Click 'Add' to import one!" : "No songs match your search."}
           </div>
         ) : (
-          filteredSongs.map((song) => {
+          filteredSongs.map((song, index) => {
             const isActive = song.id === activeSongId;
+            const isDraggingThis = dragState?.songId === song.id;
             return (
               <div
                 key={song.id}
-                onClick={() => onSelectSong(song)}
-                className={`group flex items-center justify-between p-2 rounded-xl cursor-pointer transition-all border ${
-                  isActive
-                    ? "bg-slate-800/90 border-cyan-500/50 shadow-md shadow-cyan-950/30"
-                    : "border-transparent hover:bg-slate-900/60 hover:border-slate-800"
+                ref={(el) => {
+                  if (el) {
+                    rowRefs.current.set(song.id, el);
+                  } else {
+                    rowRefs.current.delete(song.id);
+                  }
+                }}
+                tabIndex={0}
+                onPointerDown={(e) => handleRowPointerDown(e, song, index)}
+                onKeyDown={(e) => handleRowKeyDown(e, song, index)}
+                onClick={() => {
+                  if (suppressNextClickRef.current) {
+                    suppressNextClickRef.current = false;
+                    return;
+                  }
+                  onSelectSong(song);
+                }}
+                style={
+                  isDraggingThis
+                    ? {
+                        transform: `translateY(${dragState.deltaY}px) scale(1.02)`,
+                        zIndex: 30,
+                        pointerEvents: "none",
+                      }
+                    : undefined
+                }
+                className={`group relative flex items-center justify-between p-2 rounded-xl cursor-pointer border focus:outline-none focus-visible:ring-1 focus-visible:ring-cyan-400/70 ${
+                  isDraggingThis
+                    ? "bg-slate-800 border-cyan-400/70 shadow-xl shadow-black/50 opacity-95 transition-none"
+                    : isActive
+                      ? "bg-slate-800/90 border-cyan-500/50 shadow-md shadow-cyan-950/30 transition-colors"
+                      : "border-transparent hover:bg-slate-900/60 hover:border-slate-800 transition-colors"
                 }`}
               >
-                <div className="flex items-center space-x-3 overflow-hidden flex-1">
+                <div className="flex items-center space-x-2.5 overflow-hidden flex-1">
+                  {/* Drag Handle */}
+                  {onReorderSongs && filteredSongs.length > 1 && (
+                    <div
+                      data-drag-handle="true"
+                      title="Drag to reorder (or Alt+↑ / Alt+↓)"
+                      className="p-0.5 -ml-0.5 rounded text-slate-500/80 group-hover:text-slate-300 hover:bg-slate-700/60 cursor-grab active:cursor-grabbing touch-none select-none shrink-0 flex items-center justify-center"
+                    >
+                      <GripVertical className="w-3.5 h-3.5" />
+                    </div>
+                  )}
+
                   {/* Thumbnail or Icon */}
                   <div className="w-11 h-11 rounded-lg bg-slate-800 flex items-center justify-center shrink-0 overflow-hidden border border-slate-700/60">
                     {song.thumb_path && !failedThumbs[song.thumb_path] ? (
                       <img
                         src={convertFileSrc(song.thumb_path)}
                         alt=""
-                        className="w-full h-full object-cover"
+                        draggable={false}
+                        className="w-full h-full object-cover pointer-events-none"
                         onError={() => {
                           setFailedThumbs((prev) => ({
                             ...prev,
@@ -206,6 +559,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
                 {/* Delete Button */}
                 <button
+                  type="button"
+                  data-delete-song="true"
                   onClick={(e) => {
                     e.stopPropagation();
                     if (confirm(`Delete "${song.title}" from library?`)) {

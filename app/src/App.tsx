@@ -7,6 +7,25 @@ import { PitchVisualizer } from "./components/PitchVisualizer";
 import { PlayerControls } from "./components/PlayerControls";
 import { LyricsSidebar } from "./components/LyricsSidebar";
 import { DualTrackPlayer } from "./player";
+import { clampSpeed, clampTranspose } from "./audioDsp";
+import {
+  DEFAULT_SPEED,
+  DEFAULT_TRANSPOSE,
+  DEFAULT_VOCAL_PRESENCE,
+  applySavedSongOrder,
+  clampProgress,
+  clampVocalPresence,
+  deleteSongSettings,
+  getAdjacentSong,
+  isEditableKeyboardTarget,
+  isSpaceKey,
+  loadSavedSongOrder,
+  loadSongSettings,
+  resolvePlayerKeyboardCommand,
+  saveSongOrder,
+  saveSongProgress,
+  saveSongSettings,
+} from "./playerSettings";
 import { useMicrophonePitch } from "./useMicrophonePitch";
 import { Mic, MicOff, AlertCircle } from "lucide-react";
 import {
@@ -30,14 +49,25 @@ export const App: React.FC = () => {
   const [activeSong, setActiveSong] = useState<Song | null>(null);
   const [pitchFrames, setPitchFrames] = useState<PitchFrame[]>([]);
 
-  // Playback state
+  // Playback state (defaults to no preset until a song with saved settings is loaded)
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(0);
-  const [vocalPresence, setVocalPresence] = useState<number>(0.8); // 80% default
-  const [transpose, setTranspose] = useState<number>(0); // -12 to +12 semitones
-  const [speed, setSpeed] = useState<number>(1.0); // 0.50x to 1.50x
+  const [vocalPresence, setVocalPresence] = useState<number>(DEFAULT_VOCAL_PRESENCE);
+  const [transpose, setTranspose] = useState<number>(DEFAULT_TRANSPOSE);
+  const [speed, setSpeed] = useState<number>(DEFAULT_SPEED);
   const [lyricsOpen, setLyricsOpen] = useState<boolean>(false);
+  const [addModalOpen, setAddModalOpen] = useState<boolean>(false);
+
+  const sliderSettingsRef = useRef({
+    vocalPresence: DEFAULT_VOCAL_PRESENCE,
+    transpose: DEFAULT_TRANSPOSE,
+    speed: DEFAULT_SPEED,
+  });
+  const activeSongIdRef = useRef<string | null>(null);
+  const isSongReadyRef = useRef<boolean>(false);
+  const lastProgressSaveMsRef = useRef<number>(0);
+  const loadRequestIdRef = useRef<number>(0);
 
   // Resizable sidebar widths
   const [viewportWidth, setViewportWidth] = useState<number>(() =>
@@ -74,16 +104,29 @@ export const App: React.FC = () => {
   const playerRef = useRef<DualTrackPlayer | null>(null);
 
   if (!playerRef.current) {
-    playerRef.current = new DualTrackPlayer();
+    const p = new DualTrackPlayer();
+    p.setVocalPresence(DEFAULT_VOCAL_PRESENCE);
+    p.setTranspose(DEFAULT_TRANSPOSE);
+    p.setSpeed(DEFAULT_SPEED);
+    playerRef.current = p;
   }
+
+  const flushCurrentSongProgress = () => {
+    const songId = activeSongIdRef.current;
+    const player = playerRef.current;
+    if (!songId || !isSongReadyRef.current || !player) return;
+    saveSongProgress(songId, player.getCurrentTime(), player.getDuration());
+    lastProgressSaveMsRef.current = Date.now();
+  };
 
   // Load song list on startup
   const fetchSongs = async () => {
     try {
       const list = await invoke<Song[]>("list_songs");
-      setSongs(list);
-      if (list.length > 0 && !activeSong) {
-        selectSong(list[0]);
+      const ordered = applySavedSongOrder(list, loadSavedSongOrder());
+      setSongs(ordered);
+      if (ordered.length > 0 && !activeSong) {
+        selectSong(ordered[0]);
       }
     } catch (err) {
       console.error("Failed to load song library:", err);
@@ -115,7 +158,7 @@ export const App: React.FC = () => {
     return () => window.removeEventListener("resize", handleWindowResize);
   }, []);
 
-  // Set up player callbacks
+  // Set up player callbacks & persist progress on unload
   useEffect(() => {
     const player = playerRef.current;
     if (!player) return;
@@ -123,39 +166,134 @@ export const App: React.FC = () => {
     player.setOnTimeUpdate((time, dur) => {
       setCurrentTime(time);
       setDuration(dur);
+      if (isSongReadyRef.current && activeSongIdRef.current) {
+        const now = Date.now();
+        if (now - lastProgressSaveMsRef.current >= 500) {
+          lastProgressSaveMsRef.current = now;
+          saveSongProgress(activeSongIdRef.current, time, dur);
+        }
+      }
     });
 
     player.setOnEnded(() => {
       setIsPlaying(false);
       setCurrentTime(0);
+      if (activeSongIdRef.current) {
+        lastProgressSaveMsRef.current = Date.now();
+        saveSongProgress(activeSongIdRef.current, 0, player.getDuration());
+      }
     });
   }, []);
 
-  const selectSong = async (song: Song) => {
+  useEffect(() => {
+    const handleFlush = () => flushCurrentSongProgress();
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        flushCurrentSongProgress();
+      }
+    };
+    window.addEventListener("beforeunload", handleFlush);
+    window.addEventListener("pagehide", handleFlush);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      handleFlush();
+      window.removeEventListener("beforeunload", handleFlush);
+      window.removeEventListener("pagehide", handleFlush);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
+
+  const selectSong = async (song: Song, options?: { autoPlay?: boolean }) => {
+    const requestId = ++loadRequestIdRef.current;
+    const player = playerRef.current;
+
+    // Persist outgoing song progress before loadTracks() stops playback
+    if (activeSongIdRef.current && isSongReadyRef.current && player) {
+      saveSongProgress(
+        activeSongIdRef.current,
+        player.getCurrentTime(),
+        player.getDuration()
+      );
+    }
+
+    isSongReadyRef.current = false;
+    activeSongIdRef.current = song.id;
+
+    const saved = loadSongSettings(song.id);
+    sliderSettingsRef.current = {
+      vocalPresence: saved.vocalPresence,
+      transpose: saved.transpose,
+      speed: saved.speed,
+    };
+
     setActiveSong(song);
     setIsPlaying(false);
-    setCurrentTime(0);
-    setTranspose(0);
-    setSpeed(1.0);
+    setVocalPresence(saved.vocalPresence);
+    setTranspose(saved.transpose);
+    setSpeed(saved.speed);
+    setCurrentTime(saved.progress);
 
-    const player = playerRef.current;
     if (!player) return;
 
     try {
-      // 1. Load audio tracks
-      player.setTranspose(0);
-      player.setSpeed(1.0);
+      // 1. Load audio tracks with this song's saved presets (or defaults if none)
+      player.setVocalPresence(saved.vocalPresence);
+      player.setTranspose(saved.transpose);
+      player.setSpeed(saved.speed);
       const dur = await player.loadTracks(song.vocals_path, song.no_vocals_path);
+      if (loadRequestIdRef.current !== requestId) return;
+
       setDuration(dur);
-      player.setVocalPresence(vocalPresence);
+      player.setVocalPresence(sliderSettingsRef.current.vocalPresence);
+      player.setTranspose(sliderSettingsRef.current.transpose);
+      player.setSpeed(sliderSettingsRef.current.speed);
+
+      const restoredProgress = clampProgress(saved.progress, dur);
+      if (restoredProgress > 0) {
+        player.seek(restoredProgress);
+      }
+      setCurrentTime(restoredProgress);
 
       // 2. Load pitch JSON
       const jsonStr = await invoke<string>("read_text_file", { path: song.pitch_path });
+      if (loadRequestIdRef.current !== requestId) return;
+
       const parsed: PitchData = JSON.parse(jsonStr);
       setPitchFrames(parsed.frames || []);
+
+      isSongReadyRef.current = true;
+      lastProgressSaveMsRef.current = Date.now();
+
+      if (options?.autoPlay) {
+        await player.play(restoredProgress);
+        if (loadRequestIdRef.current === requestId) {
+          setIsPlaying(player.getIsPlaying());
+        }
+      }
     } catch (err) {
+      if (loadRequestIdRef.current !== requestId) return;
       console.error("Error loading selected song:", err);
       setErrorBanner(`Failed to load song assets: ${String(err)}`);
+    }
+  };
+
+  const handlePlay = async () => {
+    const player = playerRef.current;
+    if (!player || player.getIsPlaying()) return;
+    await player.play();
+    setIsPlaying(player.getIsPlaying());
+  };
+
+  const handlePause = () => {
+    const player = playerRef.current;
+    if (!player || !player.getIsPlaying()) return;
+    player.pause();
+    const t = player.getCurrentTime();
+    setIsPlaying(false);
+    setCurrentTime(t);
+    if (isSongReadyRef.current && activeSongIdRef.current) {
+      lastProgressSaveMsRef.current = Date.now();
+      saveSongProgress(activeSongIdRef.current, t, player.getDuration());
     }
   };
 
@@ -163,13 +301,32 @@ export const App: React.FC = () => {
     const player = playerRef.current;
     if (!player) return;
 
-    if (isPlaying) {
+    if (player.getIsPlaying() || isPlaying) {
       player.pause();
+      const t = player.getCurrentTime();
       setIsPlaying(false);
-      setCurrentTime(player.getCurrentTime());
+      setCurrentTime(t);
+      if (isSongReadyRef.current && activeSongIdRef.current) {
+        lastProgressSaveMsRef.current = Date.now();
+        saveSongProgress(activeSongIdRef.current, t, player.getDuration());
+      }
     } else {
       await player.play();
       setIsPlaying(player.getIsPlaying());
+    }
+  };
+
+  const handlePrevSong = async () => {
+    const prev = getAdjacentSong(songs, activeSong?.id || null, "prev");
+    if (prev) {
+      await selectSong(prev, { autoPlay: true });
+    }
+  };
+
+  const handleNextSong = async () => {
+    const next = getAdjacentSong(songs, activeSong?.id || null, "next");
+    if (next) {
+      await selectSong(next, { autoPlay: true });
     }
   };
 
@@ -178,6 +335,10 @@ export const App: React.FC = () => {
     if (!player) return;
     player.seek(seconds);
     setCurrentTime(seconds);
+    if (isSongReadyRef.current && activeSongIdRef.current) {
+      lastProgressSaveMsRef.current = Date.now();
+      saveSongProgress(activeSongIdRef.current, seconds, player.getDuration());
+    }
   };
 
   const handleJump = (delta: number) => {
@@ -187,37 +348,79 @@ export const App: React.FC = () => {
     const target = Math.max(0, Math.min(duration, cur + delta));
     player.seek(target);
     setCurrentTime(target);
-  };
-
-  const handleVocalPresenceChange = (val: number) => {
-    setVocalPresence(val);
-    const player = playerRef.current;
-    if (player) {
-      player.setVocalPresence(val);
+    if (isSongReadyRef.current && activeSongIdRef.current) {
+      lastProgressSaveMsRef.current = Date.now();
+      saveSongProgress(activeSongIdRef.current, target, player.getDuration());
     }
   };
 
+  const handleVocalPresenceChange = (val: number) => {
+    const clamped = clampVocalPresence(val);
+    sliderSettingsRef.current.vocalPresence = clamped;
+    setVocalPresence(clamped);
+    if (activeSongIdRef.current) {
+      saveSongSettings(activeSongIdRef.current, { vocalPresence: clamped });
+    }
+    playerRef.current?.setVocalPresence(clamped);
+  };
+
   const handleTransposeChange = (semitones: number) => {
-    setTranspose(semitones);
-    playerRef.current?.setTranspose(semitones);
+    const clamped = clampTranspose(semitones);
+    sliderSettingsRef.current.transpose = clamped;
+    setTranspose(clamped);
+    if (activeSongIdRef.current) {
+      saveSongSettings(activeSongIdRef.current, { transpose: clamped });
+    }
+    playerRef.current?.setTranspose(clamped);
   };
 
   const handleSpeedChange = (val: number) => {
-    setSpeed(val);
-    playerRef.current?.setSpeed(val);
+    const clamped = clampSpeed(val);
+    sliderSettingsRef.current.speed = clamped;
+    setSpeed(clamped);
+    if (activeSongIdRef.current) {
+      saveSongSettings(activeSongIdRef.current, { speed: clamped });
+    }
+    playerRef.current?.setSpeed(clamped);
+  };
+
+  const handleReorderSongs = async (reordered: Song[]) => {
+    setSongs(reordered);
+    const orderedIds = reordered.map((s) => s.id);
+    saveSongOrder(orderedIds);
+    try {
+      await invoke("reorder_songs", { songIds: orderedIds });
+    } catch (err) {
+      console.error("Failed to persist song order:", err);
+    }
   };
 
   const handleDeleteSong = async (id: string) => {
     try {
       await invoke("delete_song", { songId: id });
+      deleteSongSettings(id);
       const updated = songs.filter((s) => s.id !== id);
       setSongs(updated);
+      saveSongOrder(updated.map((s) => s.id));
       if (activeSong?.id === id) {
+        isSongReadyRef.current = false;
         if (updated.length > 0) {
           selectSong(updated[0]);
         } else {
+          activeSongIdRef.current = null;
           setActiveSong(null);
           setPitchFrames([]);
+          setIsPlaying(false);
+          setCurrentTime(0);
+          setDuration(0);
+          sliderSettingsRef.current = {
+            vocalPresence: DEFAULT_VOCAL_PRESENCE,
+            transpose: DEFAULT_TRANSPOSE,
+            speed: DEFAULT_SPEED,
+          };
+          setVocalPresence(DEFAULT_VOCAL_PRESENCE);
+          setTranspose(DEFAULT_TRANSPOSE);
+          setSpeed(DEFAULT_SPEED);
           playerRef.current?.stop();
         }
       }
@@ -237,7 +440,11 @@ export const App: React.FC = () => {
         source,
         useRoformer: false,
       });
-      setSongs((prev) => [newSong, ...prev.filter((s) => s.id !== newSong.id)]);
+      setSongs((prev) => {
+        const next = [newSong, ...prev.filter((s) => s.id !== newSong.id)];
+        saveSongOrder(next.map((s) => s.id));
+        return next;
+      });
       selectSong(newSong);
     } catch (err) {
       console.error("Process error:", err);
@@ -292,6 +499,140 @@ export const App: React.FC = () => {
     }
   };
 
+  const actionHandlersRef = useRef({
+    togglePlay: handlePlayPause,
+    play: handlePlay,
+    pause: handlePause,
+    prevTrack: handlePrevSong,
+    nextTrack: handleNextSong,
+    jump: handleJump,
+    modalOpen: addModalOpen,
+  });
+  actionHandlersRef.current = {
+    togglePlay: handlePlayPause,
+    play: handlePlay,
+    pause: handlePause,
+    prevTrack: handlePrevSong,
+    nextTrack: handleNextSong,
+    jump: handleJump,
+    modalOpen: addModalOpen,
+  };
+
+  // Global keyboard shortcuts (Spacebar play/pause, media keys, Mac Cmd+Arrows & Windows Ctrl+Arrows)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const modalOpen = actionHandlersRef.current.modalOpen;
+      const isEditable = isEditableKeyboardTarget(e.target);
+
+      if (
+        isSpaceKey(e) &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        !isEditable &&
+        !modalOpen
+      ) {
+        e.preventDefault();
+      }
+
+      const command = resolvePlayerKeyboardCommand(e, {
+        isEditableTarget: isEditable,
+        modalOpen,
+      });
+      if (!command) return;
+
+      e.preventDefault();
+
+      switch (command.type) {
+        case "toggle-play":
+          void actionHandlersRef.current.togglePlay();
+          break;
+        case "play":
+          void actionHandlersRef.current.play();
+          break;
+        case "pause":
+          actionHandlersRef.current.pause();
+          break;
+        case "prev-track":
+          void actionHandlersRef.current.prevTrack();
+          break;
+        case "next-track":
+          void actionHandlersRef.current.nextTrack();
+          break;
+        case "jump":
+          actionHandlersRef.current.jump(command.deltaSeconds);
+          break;
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  // Native OS Media Session integration (macOS Media Keys / Control Center & Windows SMTC)
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("mediaSession" in navigator)) {
+      return;
+    }
+    const mediaSession = navigator.mediaSession;
+    const actions: Array<[MediaSessionAction, MediaSessionActionHandler]> = [
+      ["play", () => void actionHandlersRef.current.play()],
+      ["pause", () => actionHandlersRef.current.pause()],
+      ["previoustrack", () => void actionHandlersRef.current.prevTrack()],
+      ["nexttrack", () => void actionHandlersRef.current.nextTrack()],
+      [
+        "seekbackward",
+        (details) => actionHandlersRef.current.jump(-(details?.seekOffset ?? 5)),
+      ],
+      [
+        "seekforward",
+        (details) => actionHandlersRef.current.jump(details?.seekOffset ?? 5),
+      ],
+    ];
+
+    for (const [action, handler] of actions) {
+      try {
+        mediaSession.setActionHandler(action, handler);
+      } catch {
+        // Ignore unsupported media session actions on older WebViews
+      }
+    }
+
+    return () => {
+      for (const [action] of actions) {
+        try {
+          mediaSession.setActionHandler(action, null);
+        } catch {
+          // Ignore
+        }
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("mediaSession" in navigator)) {
+      return;
+    }
+    const mediaSession = navigator.mediaSession;
+    mediaSession.playbackState = isPlaying
+      ? "playing"
+      : activeSong
+        ? "paused"
+        : "none";
+
+    if (activeSong && typeof MediaMetadata !== "undefined") {
+      try {
+        mediaSession.metadata = new MediaMetadata({
+          title: activeSong.title,
+          artist: activeSong.artist || "Unknown artist",
+          album: "Pitch Maniac",
+        });
+      } catch {
+        // Ignore metadata errors
+      }
+    }
+  }, [activeSong, isPlaying]);
+
   const resolvedWidths = resolveSidebarWidths({
     leftWidth,
     rightWidth,
@@ -345,8 +686,10 @@ export const App: React.FC = () => {
       <Sidebar
         songs={songs}
         activeSongId={activeSong?.id || null}
-        onSelectSong={selectSong}
+        onSelectSong={(song) => void selectSong(song)}
         onDeleteSong={handleDeleteSong}
+        onReorderSongs={handleReorderSongs}
+        onModalOpenChange={setAddModalOpen}
         onAddFromUrl={handleProcessSource}
         onAddFromFile={handleProcessSource}
         onSearchYoutube={handleSearchYoutube}
@@ -432,7 +775,10 @@ export const App: React.FC = () => {
             transpose={transpose}
             speed={speed}
             lyricsOpen={lyricsOpen}
+            canNavigateSongs={songs.length > 1}
             onPlayPause={handlePlayPause}
+            onPrevSong={handlePrevSong}
+            onNextSong={handleNextSong}
             onSeek={handleSeek}
             onJumpBack={(sec) => handleJump(-sec)}
             onJumpForward={(sec) => handleJump(sec)}

@@ -4,6 +4,8 @@ import {
   Pause,
   FastForward,
   Rewind,
+  SkipBack,
+  SkipForward,
   FileText,
   Volume2,
   Music2,
@@ -22,7 +24,10 @@ export interface PlayerControlsProps {
   transpose: number; // -12 to +12 semitones
   speed: number; // 0.50 to 1.50
   lyricsOpen: boolean;
+  canNavigateSongs?: boolean;
   onPlayPause: () => void;
+  onPrevSong?: () => void;
+  onNextSong?: () => void;
   onSeek: (seconds: number) => void;
   onJumpBack: (seconds: number) => void;
   onJumpForward: (seconds: number) => void;
@@ -340,7 +345,10 @@ export const PlayerControls: React.FC<PlayerControlsProps> = ({
   transpose,
   speed,
   lyricsOpen,
+  canNavigateSongs = false,
   onPlayPause,
+  onPrevSong,
+  onNextSong,
   onSeek,
   onJumpBack,
   onJumpForward,
@@ -367,20 +375,33 @@ export const PlayerControls: React.FC<PlayerControlsProps> = ({
       {/* Main Controls Row */}
       <div className="flex items-center justify-between w-full shrink-0 gap-3">
         {/* Left: Playback Transport Controls */}
-        <div className="flex items-center space-x-2 shrink-0">
+        <div className="flex items-center space-x-1.5 shrink-0">
           <button
+            type="button"
+            onClick={onPrevSong}
+            disabled={!canNavigateSongs || !onPrevSong}
+            aria-label="Previous track"
+            className="p-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 disabled:opacity-35 disabled:pointer-events-none transition-colors flex items-center justify-center shrink-0"
+            title="Previous Track (⌘← / Ctrl+← / Media Prev)"
+          >
+            <SkipBack className="w-4 h-4" />
+          </button>
+
+          <button
+            type="button"
             onClick={() => onJumpBack(5)}
             className="p-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors flex items-center space-x-1 text-xs font-semibold shrink-0"
-            title="Rewind 5 seconds"
+            title="Rewind 5 seconds (←)"
           >
             <Rewind className="w-4 h-4" />
             <span>5s</span>
           </button>
 
           <button
+            type="button"
             onClick={onPlayPause}
             className="p-3.5 rounded-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white shadow-lg shadow-cyan-500/25 transition-transform active:scale-95 shrink-0"
-            title={isPlaying ? "Pause" : "Play"}
+            title={isPlaying ? "Pause (Space)" : "Play (Space)"}
           >
             {isPlaying ? (
               <Pause className="w-5 h-5 fill-current" />
@@ -390,12 +411,24 @@ export const PlayerControls: React.FC<PlayerControlsProps> = ({
           </button>
 
           <button
+            type="button"
             onClick={() => onJumpForward(5)}
             className="p-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors flex items-center space-x-1 text-xs font-semibold shrink-0"
-            title="Forward 5 seconds"
+            title="Forward 5 seconds (→)"
           >
             <FastForward className="w-4 h-4" />
             <span>5s</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={onNextSong}
+            disabled={!canNavigateSongs || !onNextSong}
+            aria-label="Next track"
+            className="p-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 disabled:opacity-35 disabled:pointer-events-none transition-colors flex items-center justify-center shrink-0"
+            title="Next Track (⌘→ / Ctrl+→ / Media Next)"
+          >
+            <SkipForward className="w-4 h-4" />
           </button>
         </div>
 
