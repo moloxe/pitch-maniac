@@ -1,33 +1,55 @@
 import { invoke } from "@tauri-apps/api/core";
+import {
+  StereoTimePitchProcessor,
+  StereoTrackData,
+  clampSpeed,
+  clampTranspose,
+} from "./audioDsp";
+
+const DSP_BUFFER_SIZE = 1024;
+
+function extractStereoData(buffer: AudioBuffer): StereoTrackData {
+  const left = buffer.getChannelData(0);
+  const right = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : left;
+  return {
+    left,
+    right,
+    length: buffer.length,
+  };
+}
 
 export class DualTrackPlayer {
   private ctx: AudioContext | null = null;
   private vocalsBuffer: AudioBuffer | null = null;
   private noVocalsBuffer: AudioBuffer | null = null;
 
-  private vocalsSource: AudioBufferSourceNode | null = null;
-  private noVocalsSource: AudioBufferSourceNode | null = null;
-
-  private vocalsGain: GainNode | null = null;
-  private noVocalsGain: GainNode | null = null;
+  private processor: StereoTimePitchProcessor | null = null;
+  private scriptNode: ScriptProcessorNode | null = null;
+  private keepAliveSource: ConstantSourceNode | null = null;
   private masterGain: GainNode | null = null;
 
-  private startTime: number = 0;
+  private anchorSongTime: number = 0;
+  private anchorAudioTime: number = 0;
   private pauseOffset: number = 0;
   private isPlaying: boolean = false;
   private duration: number = 0;
 
-  private vocalPresence: number = 1.0; // 0.0 (no vocals) to 1.0 (full vocals)
+  private vocalPresence: number = 0.8; // 0.0 (no vocals) to 1.0 (full vocals)
+  private transposeSemitones: number = 0; // -12 to +12
+  private playbackSpeed: number = 1.0; // 0.50 to 1.50
+
   private onTimeUpdateCallback?: (currentTime: number, duration: number) => void;
   private onEndedCallback?: () => void;
   private animFrameId: number | null = null;
+  private endedDispatched: boolean = false;
 
   constructor() {}
 
   public async loadTracks(vocalsPath: string, noVocalsPath: string): Promise<number> {
     this.stop();
     if (!this.ctx) {
-      this.ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+      this.ctx = new (window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
     }
     if (this.ctx.state === "suspended") {
       await this.ctx.resume();
@@ -51,6 +73,16 @@ export class DualTrackPlayer {
     this.noVocalsBuffer = noVocBuf;
     this.duration = Math.max(vocBuf.duration, noVocBuf.duration);
     this.pauseOffset = 0;
+    this.anchorSongTime = 0;
+
+    this.processor = new StereoTimePitchProcessor(
+      this.ctx.sampleRate,
+      extractStereoData(vocBuf),
+      extractStereoData(noVocBuf)
+    );
+    this.processor.setVocalPresence(this.vocalPresence);
+    this.processor.setTranspose(this.transposeSemitones);
+    this.processor.setSpeed(this.playbackSpeed);
 
     return this.duration;
   }
@@ -67,13 +99,41 @@ export class DualTrackPlayer {
 
   public setVocalPresence(val: number) {
     this.vocalPresence = Math.max(0, Math.min(1, val));
-    if (this.vocalsGain && this.ctx) {
-      this.vocalsGain.gain.setValueAtTime(this.vocalPresence, this.ctx.currentTime);
+    this.processor?.setVocalPresence(this.vocalPresence);
+  }
+
+  public getVocalPresence(): number {
+    return this.vocalPresence;
+  }
+
+  public setTranspose(semitones: number) {
+    this.transposeSemitones = clampTranspose(semitones);
+    this.processor?.setTranspose(this.transposeSemitones);
+  }
+
+  public getTranspose(): number {
+    return this.transposeSemitones;
+  }
+
+  public setSpeed(speed: number) {
+    const clamped = clampSpeed(speed);
+    if (this.isPlaying && this.ctx) {
+      // Re-anchor current visual time before changing speed to prevent jump
+      const now = this.ctx.currentTime;
+      const cur = this.getCurrentTime();
+      this.anchorSongTime = cur;
+      this.anchorAudioTime = now;
     }
+    this.playbackSpeed = clamped;
+    this.processor?.setSpeed(this.playbackSpeed);
+  }
+
+  public getSpeed(): number {
+    return this.playbackSpeed;
   }
 
   public async play(offsetSeconds?: number) {
-    if (!this.ctx || !this.vocalsBuffer || !this.noVocalsBuffer) return;
+    if (!this.ctx || !this.vocalsBuffer || !this.noVocalsBuffer || !this.processor) return;
     if (this.isPlaying) return;
 
     if (this.ctx.state === "suspended") {
@@ -83,59 +143,74 @@ export class DualTrackPlayer {
     const startPos = offsetSeconds !== undefined ? offsetSeconds : this.pauseOffset;
     if (startPos >= this.duration) {
       this.pauseOffset = 0;
+      this.anchorSongTime = 0;
       return;
     }
+
+    this.processor.seekSeconds(startPos);
+    this.endedDispatched = false;
 
     this.masterGain = this.ctx.createGain();
     this.masterGain.connect(this.ctx.destination);
 
-    // Vocals track
-    this.vocalsGain = this.ctx.createGain();
-    this.vocalsGain.gain.setValueAtTime(this.vocalPresence, this.ctx.currentTime);
-    this.vocalsGain.connect(this.masterGain);
+    // Use 1 silent input channel so WebKit/Safari reliably fires onaudioprocess
+    this.scriptNode = this.ctx.createScriptProcessor(DSP_BUFFER_SIZE, 1, 2);
+    this.keepAliveSource = this.ctx.createConstantSource();
+    this.keepAliveSource.offset.setValueAtTime(0, this.ctx.currentTime);
+    this.keepAliveSource.connect(this.scriptNode);
+    this.scriptNode.connect(this.masterGain);
 
-    this.vocalsSource = this.ctx.createBufferSource();
-    this.vocalsSource.buffer = this.vocalsBuffer;
-    this.vocalsSource.connect(this.vocalsGain);
+    this.anchorSongTime = startPos;
+    this.anchorAudioTime = this.ctx.currentTime;
 
-    // Backing (no vocals) track
-    this.noVocalsGain = this.ctx.createGain();
-    this.noVocalsGain.gain.setValueAtTime(1.0, this.ctx.currentTime);
-    this.noVocalsGain.connect(this.masterGain);
+    this.scriptNode.onaudioprocess = (event: AudioProcessingEvent) => {
+      if (!this.processor || !this.ctx || !this.isPlaying) return;
 
-    this.noVocalsSource = this.ctx.createBufferSource();
-    this.noVocalsSource.buffer = this.noVocalsBuffer;
-    this.noVocalsSource.connect(this.noVocalsGain);
+      const outL = event.outputBuffer.getChannelData(0);
+      const outR = event.outputBuffer.getChannelData(1);
 
-    // Start playback synchronized
-    const now = this.ctx.currentTime;
-    this.startTime = now - startPos;
-    this.vocalsSource.start(0, startPos);
-    this.noVocalsSource.start(0, startPos);
+      const blockStartSongTime = this.processor.getCurrentTimeSeconds();
+      this.processor.processBlock(outL, outR, event.outputBuffer.length);
 
-    this.isPlaying = true;
-    this.noVocalsSource.onended = () => {
-      if (this.getCurrentTime() >= this.duration - 0.2) {
-        this.pause();
-        this.pauseOffset = 0;
-        this.onEndedCallback?.();
+      this.anchorSongTime = blockStartSongTime;
+      this.anchorAudioTime = this.ctx.currentTime;
+
+      if (this.processor.isEnded() && !this.endedDispatched) {
+        this.endedDispatched = true;
+        setTimeout(() => {
+          if (!this.isPlaying) return;
+          this.stopActiveNodes();
+          this.pauseOffset = 0;
+          this.anchorSongTime = 0;
+          this.onTimeUpdateCallback?.(0, this.duration);
+          this.onEndedCallback?.();
+        }, 0);
       }
     };
 
+    this.keepAliveSource.start();
+    this.isPlaying = true;
     this.startTracking();
   }
 
-  private stopActiveSources() {
-    if (this.vocalsSource) {
-      try { this.vocalsSource.stop(); } catch { /* ignore */ }
-      this.vocalsSource.disconnect();
-      this.vocalsSource = null;
+  private stopActiveNodes() {
+    if (this.scriptNode) {
+      this.scriptNode.onaudioprocess = null;
+      this.scriptNode.disconnect();
+      this.scriptNode = null;
     }
-    if (this.noVocalsSource) {
-      this.noVocalsSource.onended = null;
-      try { this.noVocalsSource.stop(); } catch { /* ignore */ }
-      this.noVocalsSource.disconnect();
-      this.noVocalsSource = null;
+    if (this.keepAliveSource) {
+      try {
+        this.keepAliveSource.stop();
+      } catch {
+        /* ignore */
+      }
+      this.keepAliveSource.disconnect();
+      this.keepAliveSource = null;
+    }
+    if (this.masterGain) {
+      this.masterGain.disconnect();
+      this.masterGain = null;
     }
     this.isPlaying = false;
     this.stopTracking();
@@ -143,8 +218,10 @@ export class DualTrackPlayer {
 
   public pause() {
     if (!this.isPlaying || !this.ctx) return;
-    this.pauseOffset = this.getCurrentTime();
-    this.stopActiveSources();
+    const current = this.getCurrentTime();
+    this.pauseOffset = current;
+    this.anchorSongTime = current;
+    this.stopActiveNodes();
     this.onTimeUpdateCallback?.(this.pauseOffset, this.duration);
   }
 
@@ -152,11 +229,13 @@ export class DualTrackPlayer {
     const clamped = Math.max(0, Math.min(this.duration, targetSeconds));
     const wasPlaying = this.isPlaying;
     if (wasPlaying) {
-      this.stopActiveSources();
+      this.stopActiveNodes();
     }
     this.pauseOffset = clamped;
+    this.anchorSongTime = clamped;
+    this.processor?.seekSeconds(clamped);
     if (wasPlaying) {
-      this.play(clamped);
+      void this.play(clamped);
     }
     this.onTimeUpdateCallback?.(clamped, this.duration);
   }
@@ -164,6 +243,8 @@ export class DualTrackPlayer {
   public stop() {
     this.pause();
     this.pauseOffset = 0;
+    this.anchorSongTime = 0;
+    this.processor?.seekSeconds(0);
     this.onTimeUpdateCallback?.(0, this.duration);
   }
 
@@ -171,7 +252,10 @@ export class DualTrackPlayer {
     if (!this.isPlaying || !this.ctx) {
       return this.pauseOffset;
     }
-    return Math.min(this.duration, Math.max(0, this.ctx.currentTime - this.startTime));
+    const elapsed = Math.max(0, this.ctx.currentTime - this.anchorAudioTime);
+    const maxStep = (DSP_BUFFER_SIZE / this.ctx.sampleRate) * this.playbackSpeed * 2;
+    const interpolated = this.anchorSongTime + Math.min(elapsed * this.playbackSpeed, maxStep);
+    return Math.min(this.duration, Math.max(0, interpolated));
   }
 
   public getIsPlaying(): boolean {

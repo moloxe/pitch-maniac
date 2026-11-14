@@ -81,9 +81,15 @@ export interface PitchVisualizerProps {
   getCurrentTime?: () => number;
   micMidi: number | null;
   micVoiced: boolean;
+  transpose?: number;
+  speed?: number;
   minMidi?: number;
   maxMidi?: number;
   timeWindowSeconds?: number; // width in seconds shown ahead
+}
+
+export function transposeNoteMidi(midi: number, transposeSemitones: number): number {
+  return midi + transposeSemitones;
 }
 
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
@@ -101,6 +107,8 @@ export const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
   getCurrentTime,
   micMidi,
   micVoiced,
+  transpose = 0,
+  speed = 1.0,
   minMidi = 36, // C2
   maxMidi = 84, // C6
   timeWindowSeconds = 5.0,
@@ -108,9 +116,9 @@ export const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // Stable precomputed note segments from pitch frames
+  // Extract segments over an extended ±12 semitone range so transposed notes entering view aren't clipped
   const noteSegments = useMemo(() => {
-    return extractNoteSegments(frames, minMidi, maxMidi);
+    return extractNoteSegments(frames, minMidi - 12, maxMidi + 12);
   }, [frames, minMidi, maxMidi]);
 
   // Keep live references for continuous 60fps render loop
@@ -119,6 +127,9 @@ export const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
 
   const micRef = useRef({ midi: micMidi, voiced: micVoiced });
   micRef.current = { midi: micMidi, voiced: micVoiced };
+
+  const transposeRef = useRef(transpose);
+  transposeRef.current = transpose;
 
   const segmentsRef = useRef(noteSegments);
   segmentsRef.current = noteSegments;
@@ -239,6 +250,7 @@ export const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
       const visibleMaxTime = curTime + timeWindowSeconds + 0.5;
 
       const segments = segmentsRef.current;
+      const activeTranspose = transposeRef.current;
       const semitoneHeight = height / midiRange;
       const barH = Math.max(8, Math.min(20, semitoneHeight * 0.85));
 
@@ -247,11 +259,14 @@ export const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
         if (seg.endTime < visibleMinTime) continue;
         if (seg.startTime > visibleMaxTime) break;
 
+        const shiftedMidi = transposeNoteMidi(seg.midi, activeTranspose);
+        if (shiftedMidi < minMidi || shiftedMidi > maxMidi) continue;
+
         const startX = headX + (seg.startTime - curTime) * pixelsPerSecond;
         const endX = headX + (seg.endTime - curTime) * pixelsPerSecond;
         const barW = Math.max(6, endX - startX);
 
-        const y = height - ((seg.midi - minMidi) / midiRange) * height;
+        const y = height - ((shiftedMidi - minMidi) / midiRange) * height;
 
         const isPast = endX < headX;
         const isActive = startX <= headX && endX >= headX;
@@ -326,6 +341,22 @@ export const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
           <span className="w-2.5 h-2.5 rounded-full bg-pink-500 animate-pulse"></span>
           <span className="text-slate-300 font-medium">Your Voice (Mic)</span>
         </span>
+        {transpose !== 0 && (
+          <>
+            <span className="text-slate-600">|</span>
+            <span className="font-mono font-semibold text-violet-300">
+              {transpose > 0 ? `+${transpose}` : transpose} st
+            </span>
+          </>
+        )}
+        {Math.abs(speed - 1.0) > 1e-4 && (
+          <>
+            <span className="text-slate-600">|</span>
+            <span className="font-mono font-semibold text-amber-300">
+              {speed.toFixed(2)}x
+            </span>
+          </>
+        )}
       </div>
 
       <canvas

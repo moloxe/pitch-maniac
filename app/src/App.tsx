@@ -21,6 +21,8 @@ export const App: React.FC = () => {
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(0);
   const [vocalPresence, setVocalPresence] = useState<number>(0.8); // 80% default
+  const [transpose, setTranspose] = useState<number>(0); // -12 to +12 semitones
+  const [speed, setSpeed] = useState<number>(1.0); // 0.50x to 1.50x
   const [lyricsOpen, setLyricsOpen] = useState<boolean>(false);
 
   // Processing state
@@ -90,12 +92,16 @@ export const App: React.FC = () => {
     setActiveSong(song);
     setIsPlaying(false);
     setCurrentTime(0);
+    setTranspose(0);
+    setSpeed(1.0);
 
     const player = playerRef.current;
     if (!player) return;
 
     try {
       // 1. Load audio tracks
+      player.setTranspose(0);
+      player.setSpeed(1.0);
       const dur = await player.loadTracks(song.vocals_path, song.no_vocals_path);
       setDuration(dur);
       player.setVocalPresence(vocalPresence);
@@ -146,6 +152,16 @@ export const App: React.FC = () => {
     if (player) {
       player.setVocalPresence(val);
     }
+  };
+
+  const handleTransposeChange = (semitones: number) => {
+    setTranspose(semitones);
+    playerRef.current?.setTranspose(semitones);
+  };
+
+  const handleSpeedChange = (val: number) => {
+    setSpeed(val);
+    playerRef.current?.setSpeed(val);
   };
 
   const handleDeleteSong = async (id: string) => {
@@ -281,6 +297,8 @@ export const App: React.FC = () => {
             getCurrentTime={() => playerRef.current?.getCurrentTime() ?? 0}
             micMidi={micPitch.voiced ? micPitch.midi : null}
             micVoiced={micPitch.voiced}
+            transpose={transpose}
+            speed={speed}
             timeWindowSeconds={4.5}
           />
         </div>
@@ -293,12 +311,16 @@ export const App: React.FC = () => {
             getCurrentTime={() => playerRef.current?.getCurrentTime() ?? 0}
             duration={duration}
             vocalPresence={vocalPresence}
+            transpose={transpose}
+            speed={speed}
             lyricsOpen={lyricsOpen}
             onPlayPause={handlePlayPause}
             onSeek={handleSeek}
             onJumpBack={(sec) => handleJump(-sec)}
             onJumpForward={(sec) => handleJump(sec)}
             onVocalPresenceChange={handleVocalPresenceChange}
+            onTransposeChange={handleTransposeChange}
+            onSpeedChange={handleSpeedChange}
             onToggleLyrics={() => setLyricsOpen(!lyricsOpen)}
           />
         </div>
